@@ -150,9 +150,12 @@ with st.sidebar:
         else:
             countries = suppliers_df["country"].dropna().unique().tolist()
             llm_note = "🤖 + LLM filter" if openai_api_key else "keyword filter only"
-            with st.spinner(f"Scanning 60+ sources · {llm_note}..."):
+            # Build supplier list for targeted feeds
+            supplier_list = suppliers_df[["city","country"]].dropna().to_dict("records")
+            with st.spinner(f"Scanning 60+ sources + {len(supplier_list)} supplier-targeted feeds · {llm_note}..."):
                 rss, gdelt, newsapi, weather, fstats = refresh_all_events(
-                    news_api_key, weather_api_key, countries, openai_api_key
+                    news_api_key, weather_api_key, countries,
+                    openai_api_key, suppliers=supplier_list
                 )
             approved = fstats.get("approved", 0)
             total    = fstats.get("total", 0)
@@ -173,8 +176,10 @@ with st.sidebar:
             suppliers_df = get_all_suppliers()
             if not suppliers_df.empty:
                 countries = suppliers_df["country"].dropna().unique().tolist()
+                supplier_list = suppliers_df[["city","country"]].dropna().to_dict("records")
                 rss, gdelt, newsapi, weather, fstats = refresh_all_events(
-                    news_api_key, weather_api_key, countries, openai_api_key
+                    news_api_key, weather_api_key, countries,
+                    openai_api_key, suppliers=supplier_list
                 )
                 run_scoring_engine()
                 st.session_state["last_refresh"] = datetime.utcnow()
