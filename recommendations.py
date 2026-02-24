@@ -592,7 +592,10 @@ def generate_ai_recommendations(
     )
 
     try:
-        import openai
+        try:
+    import openai
+except ImportError:
+    openai = None
         client = openai.OpenAI(api_key=openai_api_key)
 
         response = client.chat.completions.create(
