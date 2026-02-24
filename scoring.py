@@ -18,8 +18,14 @@ using a large built-in city→(lat,lon) lookup — no API calls needed.
 import math
 import re
 import pandas as pd
-import pycountry
-import pycountry_convert as pc
+try:
+    import pycountry
+except ImportError:
+    pycountry = None
+try:
+    import pycountry_convert as pc
+except ImportError:
+    pc = None
 from datetime import datetime, timezone
 from database import get_all_events, update_supplier_risk, get_all_suppliers
 from city_geocoder import geocode_city_fast, geocode_city
@@ -645,6 +651,8 @@ def classify_signal(title: str, description: str = "") -> str:
 
 def get_continent(country_name: str) -> str | None:
     try:
+        if pycountry is None or pc is None:
+            return None
         country = pycountry.countries.lookup(country_name)
         return pc.country_alpha2_to_continent_code(country.alpha_2)
     except Exception:
@@ -948,8 +956,17 @@ def ai_parse_event(event_text: str, openai_api_key: str) -> dict:
     if not openai_api_key:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
     try:
-        import openai, json
-        client = openai.OpenAI(api_key=openai_api_key)
+        try:
+    import openai
+except ImportError:
+    openai = None
+try:
+    import json
+except ImportError:
+    json = None
+        if openai is None:
+        return None
+    client = openai.OpenAI(api_key=openai_api_key)
         prompt = (f'Analyze this news excerpt. Respond ONLY in JSON.\n'
                   f'Article: "{event_text}"\n'
                   f'{{"disruption_likely":"Yes/No","country":"name or Unknown","severity":"low/medium/high"}}')
