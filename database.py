@@ -51,12 +51,18 @@ def init_db():
             source TEXT,
             published_date TEXT,
             detected_country TEXT,
-            event_type TEXT,  -- 'news' or 'weather'
+            event_type TEXT,
             severity TEXT DEFAULT 'medium',
             disruption_likely TEXT DEFAULT 'Unknown',
+            url TEXT DEFAULT '',
             created_at TEXT
         )
     """)
+    # Add url column to existing databases (safe migration)
+    try:
+        cursor.execute("ALTER TABLE events ADD COLUMN url TEXT DEFAULT ''")
+    except Exception:
+        pass  # Column already exists
 
     conn.commit()
     conn.close()
@@ -131,16 +137,16 @@ def get_all_suppliers() -> pd.DataFrame:
 
 
 def insert_event(title, description, source, published_date, country, event_type,
-                 severity="medium", disruption_likely="Unknown"):
+                 severity="medium", disruption_likely="Unknown", url=""):
     """Insert a single event (news or weather) into the events table."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO events (title, description, source, published_date,
-                            detected_country, event_type, severity, disruption_likely, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            detected_country, event_type, severity, disruption_likely, url, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (title, description, source, published_date, country, event_type,
-          severity, disruption_likely, datetime.utcnow().isoformat()))
+          severity, disruption_likely, url or "", datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
 
