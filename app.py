@@ -19,6 +19,7 @@ from geocoding import geocode_suppliers
 from events import refresh_all_events, should_auto_refresh
 from scoring import run_scoring_engine, get_score_breakdown
 from recommendations import get_recommendations
+from predictions import get_predictions
 from mapping import build_supplier_map
 from alerts import dispatch_alerts
 
@@ -416,6 +417,100 @@ if not suppliers_df.empty:
                     sc3.metric("Events Counted", f"{len(counted)} of {len(breakdown)}")
                     sc4.metric("Top Event", f"{counted[0]['points']:.1f} pts" if counted else "—")
 
+                    # ── Predictions Panel ─────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("##### 🔮 Forward-Looking Risk Predictions")
+                    st.caption(f"Based on city-level risk profile for {city}, {country} + active events")
+
+                    pred_key = f"pred_{name}"
+                    if st.button("📡 Generate Predictions", key=f"genp_{name}"):
+                        st.session_state[pred_key] = get_predictions(
+                            supplier_name = name,
+                            city          = city,
+                            country       = country,
+                            category      = category,
+                            tier          = tier,
+                            risk_score    = score,
+                            risk_level    = level,
+                            lat           = row.get("latitude"),
+                            lon           = row.get("longitude"),
+                            breakdown     = breakdown,
+                            openai_api_key= openai_api_key,
+                        )
+
+                    pred = st.session_state.get(pred_key)
+                    if pred:
+                        conf_badge = "🤖 AI-Enhanced" if pred.confidence == "ai-enhanced" else "📋 Rule-Based"
+
+                        # City risk profile + active threat
+                        st.markdown(f"""
+                        <div style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:14px;margin-bottom:10px;">
+                            <div style="color:#94a3b8;font-size:0.72rem;letter-spacing:0.1em;margin-bottom:6px">
+                                📍 CITY RISK PROFILE — {city.upper()}, {country.upper()} &nbsp;·&nbsp; {conf_badge}
+                            </div>
+                            <p style="color:#f1f5f9;margin:0 0 6px 0;font-size:0.87rem">{pred.city_risk_profile}</p>
+                            <p style="color:#f59e0b;margin:0;font-size:0.83rem">⚡ {pred.active_threat}</p>
+                            <p style="color:#64748b;margin:4px 0 0 0;font-size:0.78rem">🗓 {pred.seasonal_context}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Time horizons
+                        TRAJ_COLORS = {
+                            "ESCALATING": "#ef4444", "STABLE": "#22c55e",
+                            "IMPROVING":  "#3b82f6", "UNCERTAIN": "#f59e0b",
+                            "ELEVATED":   "#f59e0b",
+                        }
+                        h_cols = st.columns(3)
+                        for i, horizon in enumerate(pred.horizons):
+                            traj_color = TRAJ_COLORS.get(horizon.risk_trajectory, "#64748b")
+                            with h_cols[i]:
+                                st.markdown(f"""
+                                <div style="background:#0f172a;border:1px solid #1e293b;
+                                            border-top:3px solid {traj_color};
+                                            border-radius:6px;padding:12px;height:100%">
+                                    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                                        <span style="color:#94a3b8;font-size:0.72rem;font-weight:600">
+                                            {horizon.icon} {horizon.timeframe.upper()}
+                                        </span>
+                                        <span style="color:{traj_color};font-size:0.72rem;font-weight:700">
+                                            {horizon.risk_trajectory}
+                                        </span>
+                                    </div>
+                                    <div style="font-size:1.4rem;font-weight:700;color:{traj_color};margin-bottom:2px">
+                                        {horizon.probability_of_disruption}%
+                                    </div>
+                                    <div style="color:#64748b;font-size:0.72rem;margin-bottom:8px">
+                                        disruption probability · {horizon.expected_impact} impact
+                                    </div>
+                                    <p style="color:#94a3b8;font-size:0.8rem;margin:0;line-height:1.5">
+                                        {horizon.narrative}
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                        # Triggers to watch
+                        if pred.horizons:
+                            st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+                            t1, t2 = st.columns(2)
+                            with t1:
+                                st.markdown("""
+                                <div style="color:#f59e0b;font-size:0.75rem;font-weight:600;margin-bottom:4px">
+                                    👁 TRIGGERS TO WATCH (72h)
+                                </div>""", unsafe_allow_html=True)
+                                for trigger in pred.horizons[0].triggers_to_watch:
+                                    st.markdown(f"<div style='color:#94a3b8;font-size:0.8rem'>• {trigger}</div>",
+                                                unsafe_allow_html=True)
+                            with t2:
+                                if pred.cascade_risks:
+                                    st.markdown("""
+                                    <div style="color:#8b5cf6;font-size:0.75rem;font-weight:600;margin-bottom:4px">
+                                        🔗 CASCADE RISKS
+                                    </div>""", unsafe_allow_html=True)
+                                    for cr in pred.cascade_risks[:3]:
+                                        st.markdown(f"<div style='color:#94a3b8;font-size:0.8rem'>• {cr}</div>",
+                                                    unsafe_allow_html=True)
+
+                    st.markdown("---")
                     st.markdown("##### 🔍 Events contributing to this score")
                     st.caption("Only the top 5 highest-scoring events count toward the final score. Others are shown for context.")
 
