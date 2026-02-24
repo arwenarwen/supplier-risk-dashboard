@@ -223,21 +223,31 @@ with st.container():
         """)
 
     if uploaded_file:
-        with st.spinner("Processing upload..."):
-            df = process_upload(uploaded_file)
+        # Use file name + size as unique key to detect if this is a NEW file
+        file_key = f"{uploaded_file.name}_{uploaded_file.size}"
 
-        if df is not None:
-            st.info(f"Running geocoding for {len(df)} suppliers (may take ~{len(df)} seconds)...")
-            progress = st.progress(0, text="Starting geocoding...")
-            df = geocode_suppliers(df, progress_bar=progress)
-            progress.empty()
+        if st.session_state.get("last_uploaded_file") == file_key:
+            # Same file already processed — show confirmation, don't re-run
+            st.success("✅ Suppliers already uploaded and scored. Upload a new file to replace.")
+        else:
+            # New file detected — process it
+            with st.spinner("Processing upload..."):
+                df = process_upload(uploaded_file)
 
-            # Auto-run scoring after upload
-            with st.spinner("Computing initial risk scores..."):
-                run_scoring_engine()
+            if df is not None:
+                st.info(f"Running geocoding for {len(df)} suppliers (may take ~{len(df)} seconds)...")
+                progress = st.progress(0, text="Starting geocoding...")
+                df = geocode_suppliers(df, progress_bar=progress)
+                progress.empty()
 
-            st.success("✅ Suppliers uploaded, geocoded, and scored!")
-            st.rerun()
+                # Auto-run scoring after upload
+                with st.spinner("Computing initial risk scores..."):
+                    run_scoring_engine()
+
+                # Mark this file as done so it won't re-process on next rerun
+                st.session_state["last_uploaded_file"] = file_key
+                st.success("✅ Suppliers uploaded, geocoded, and scored!")
+                st.rerun()
 
 st.markdown("---")
 
