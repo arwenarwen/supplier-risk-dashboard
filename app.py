@@ -578,6 +578,14 @@ if not suppliers_df.empty:
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
+                        # Article link button (outside the HTML card)
+                        ev_url = ev.get("url", "")
+                        if ev_url:
+                            st.markdown(
+                                f'<a href="{ev_url}" target="_blank" style="font-size:0.75rem;color:#3b82f6;text-decoration:none;">' +
+                                '📰 Read full article →</a>',
+                                unsafe_allow_html=True
+                            )
 
                     # ── Recommendations Panel ─────────────────────────────
                     st.markdown("---")
