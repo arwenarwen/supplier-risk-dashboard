@@ -18,6 +18,7 @@ from upload import process_upload, get_sample_csv
 from geocoding import geocode_suppliers
 from events import refresh_all_events, should_auto_refresh
 from scoring import run_scoring_engine, get_score_breakdown
+from recommendations import get_recommendations
 from mapping import build_supplier_map
 from alerts import dispatch_alerts
 
@@ -457,8 +458,125 @@ if not suppliers_df.empty:
                         </div>
                         """, unsafe_allow_html=True)
 
-                    if st.button("✕ Close breakdown", key=f"close_{name}"):
+                    # ── Recommendations Panel ─────────────────────────────
+                    st.markdown("---")
+                    st.markdown("##### 💡 What Should You Do?")
+
+                    rec_key = f"rec_{name}"
+                    if st.button("🤖 Generate Action Plan", key=f"gen_{name}", use_container_width=False):
+                        st.session_state[rec_key] = get_recommendations(
+                            supplier_name    = name,
+                            supplier_city    = city,
+                            supplier_country = country,
+                            supplier_tier    = tier,
+                            supplier_category= category,
+                            risk_score       = score,
+                            risk_level       = level,
+                            breakdown        = breakdown,
+                            events_summary   = str(row.get("event_summary", "")),
+                            openai_api_key   = openai_api_key
+                        )
+
+                    rec = st.session_state.get(rec_key)
+                    if rec:
+                        confidence_badge = "🤖 AI-Enhanced" if rec.confidence == "ai-enhanced" else "📋 Rule-Based"
+                        URGENCY_COLORS = {
+                            "CRITICAL": "#ef4444", "HIGH": "#f59e0b",
+                            "MEDIUM": "#3b82f6",   "LOW": "#22c55e", "WATCH": "#64748b"
+                        }
+                        level_upper = level.upper()
+                        urg_color = URGENCY_COLORS.get(level_upper, "#64748b")
+
+                        # Situation summary card
+                        st.markdown(f"""
+                        <div style="background:#1e293b;border:1px solid #334155;border-left:4px solid {urg_color};
+                                    border-radius:8px;padding:16px;margin-bottom:12px;">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                                <span style="color:#94a3b8;font-size:0.75rem;letter-spacing:0.1em">SITUATION ASSESSMENT</span>
+                                <span style="color:#64748b;font-size:0.75rem">{confidence_badge}</span>
+                            </div>
+                            <p style="color:#f1f5f9;margin:0;line-height:1.6">{rec.situation_summary}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Action cards
+                        st.markdown("**Recommended Actions** — in priority order:")
+                        CAT_COLORS = {
+                            "inventory":   "#3b82f6",
+                            "redirect":    "#8b5cf6",
+                            "dual_source": "#8b5cf6",
+                            "monitor":     "#64748b",
+                            "escalate":    "#ef4444",
+                        }
+                        TIMEFRAME_URGENCY = {
+                            "Immediate": "#ef4444",
+                            "Within 48 hours": "#f59e0b",
+                            "This week": "#3b82f6",
+                            "This month": "#22c55e",
+                            "Ongoing": "#64748b",
+                        }
+                        for action in rec.actions:
+                            cat_color  = CAT_COLORS.get(action.category, "#64748b")
+                            tf_color   = TIMEFRAME_URGENCY.get(action.timeframe, "#64748b")
+                            st.markdown(f"""
+                            <div style="background:#0f172a;border:1px solid #1e293b;border-left:4px solid {cat_color};
+                                        border-radius:6px;padding:12px 16px;margin-bottom:8px;">
+                                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                                    <span style="color:#f1f5f9;font-weight:700;font-size:0.95rem">
+                                        {action.icon} {action.action}
+                                    </span>
+                                    <span style="color:{tf_color};font-size:0.75rem;font-weight:600;
+                                                 white-space:nowrap;margin-left:12px;">
+                                        ⏱ {action.timeframe}
+                                    </span>
+                                </div>
+                                <p style="color:#94a3b8;margin:6px 0 0 0;font-size:0.85rem;line-height:1.5">
+                                    {action.detail}
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Stock up + Alternative note side by side
+                        sn1, sn2 = st.columns(2)
+                        with sn1:
+                            st.markdown(f"""
+                            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:12px;">
+                                <div style="color:#f59e0b;font-size:0.75rem;font-weight:600;margin-bottom:4px">
+                                    ⏱ LEAD TIME WARNING
+                                </div>
+                                <p style="color:#94a3b8;margin:0;font-size:0.83rem">{rec.lead_time_warning}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        with sn2:
+                            st.markdown(f"""
+                            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:12px;">
+                                <div style="color:#8b5cf6;font-size:0.75rem;font-weight:600;margin-bottom:4px">
+                                    🔄 ALTERNATIVE SUPPLIERS
+                                </div>
+                                <p style="color:#94a3b8;margin:0;font-size:0.83rem">{rec.alternative_note}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Don't do this
+                        if rec.do_not_do:
+                            st.markdown("""
+                            <div style="background:#1a0a0a;border:1px solid #3f1f1f;border-radius:6px;
+                                        padding:12px 16px;margin-top:10px;">
+                                <div style="color:#ef4444;font-size:0.75rem;font-weight:600;margin-bottom:6px">
+                                    ⛔ COMMON MISTAKES TO AVOID
+                                </div>
+                            """, unsafe_allow_html=True)
+                            for dont in rec.do_not_do:
+                                st.markdown(f"""
+                                <div style="color:#fca5a5;font-size:0.83rem;margin-bottom:3px">
+                                    • {dont}
+                                </div>
+                                """, unsafe_allow_html=True)
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                    if st.button("✕ Close", key=f"close_{name}"):
                         st.session_state.pop("drill_supplier", None)
+                        st.session_state.pop(rec_key, None)
                         st.rerun()
 
                 st.markdown("---")
