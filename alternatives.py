@@ -229,11 +229,17 @@ def detect_countdown(title: str, description: str, published_date_str: str) -> O
             break
     if not affected:
         # Extract country mentions from title
-        import pycountry as _pc
-        for word in title.split():
-            try:
-                c = _pc.countries.lookup(word.strip(",."))
-                affected.append(c.name)
+        try:
+            import pycountry as _pc
+            for word in title.split():
+                try:
+                    c = _pc.countries.lookup(word.strip(",."))
+                    affected.append(c.name)
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        if False:  # placeholder
             except Exception:
                 pass
 
