@@ -39,7 +39,13 @@ Three complementary sources that together cover every country on Earth:
 import re
 import time
 import requests
-import pycountry
+try:
+    try:
+    import pycountry
+except ImportError:
+    pycountry = None
+except ImportError:
+    pycountry = None
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
