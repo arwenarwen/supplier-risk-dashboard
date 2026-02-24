@@ -262,7 +262,10 @@ def layer3_llm_filter(
         return True, {"llm_skipped": True, "reason": f"Daily budget of {LLM_DAILY_BUDGET} calls reached"}
 
     try:
-        import openai
+        try:
+    import openai
+except ImportError:
+    openai = None
         client = openai.OpenAI(api_key=openai_api_key)
 
         _increment_llm_count()
