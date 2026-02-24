@@ -645,26 +645,48 @@ def refresh_all_events(
     """
     clear_events()
 
-    # ── Warm geocoding cache for all supplier cities ─────────────────────────
+    # ── Warm geocoding cache (skip if already cached — no network call needed) ─
+    # Nominatim is 1 req/sec so we only geocode cities NOT already in cache
     if suppliers:
-        warm_cache_for_suppliers(suppliers)
+        warm_cache_for_suppliers(suppliers)  # uses cache-first, only calls API for new cities
 
     # ── Build supplier-specific targeted feeds (any city, any country) ────────
     supplier_feeds = []
     if suppliers:
         supplier_feeds = build_dynamic_supplier_feeds(suppliers)
 
-    # ── Gather raw articles from all sources ──────────────────────────────────
+    # ── Gather raw articles from all sources IN PARALLEL ────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
     all_news = []
-    # Global wire feeds + supplier-targeted feeds (covers any country)
-    all_news.extend(fetch_all_global_parallel(supplier_feeds))
-    # GDELT targeted per-supplier country (150+ countries, 65 languages)
-    if suppliers:
-        all_news.extend(fetch_gdelt_for_suppliers(suppliers))
-    else:
-        all_news.extend(fetch_gdelt_events())
-    # NewsAPI (English, optional)
-    all_news.extend(fetch_newsapi_events(news_api_key))
+
+    def _fetch_rss():
+        return fetch_all_global_parallel(supplier_feeds)
+    def _fetch_gdelt():
+        return fetch_gdelt_for_suppliers(suppliers) if suppliers else fetch_gdelt_events()
+    def _fetch_newsapi():
+        return fetch_newsapi_events(news_api_key)
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {
+            ex.submit(_fetch_rss):     "rss",
+            ex.submit(_fetch_gdelt):   "gdelt",
+            ex.submit(_fetch_newsapi): "newsapi",
+        }
+        import time as _t2
+        deadline2 = _t2.time() + 40  # 40s wall — never raises TimeoutError
+        pending2  = set(futures.keys())
+        while pending2 and _t2.time() < deadline2:
+            newly_done = {f for f in pending2 if f.done()}
+            for f in newly_done:
+                try:
+                    all_news.extend(f.result())
+                except Exception:
+                    pass
+            pending2 -= newly_done
+            if pending2:
+                _t2.sleep(0.5)
+        for f in pending2:
+            f.cancel()
 
     unique = deduplicate(all_news)
 
