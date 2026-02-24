@@ -20,6 +20,7 @@ from events import refresh_all_events, should_auto_refresh
 from scoring import run_scoring_engine, get_score_breakdown
 from recommendations import get_recommendations
 from predictions import get_predictions
+from alternatives import find_alternatives, detect_countdown
 from mapping import build_supplier_map
 from alerts import dispatch_alerts
 
@@ -694,9 +695,149 @@ if not suppliers_df.empty:
                                 """, unsafe_allow_html=True)
                             st.markdown("</div>", unsafe_allow_html=True)
 
+                    # ── Alternative Suppliers Panel ───────────────────────
+                    st.markdown("---")
+                    st.markdown("##### 🔄 Alternative Suppliers")
+
+                    alt_key = f"alt_{name}"
+                    if st.button("🔍 Find Alternatives", key=f"gena_{name}"):
+                        # Scan top events for countdown language
+                        countdown = None
+                        for ev in breakdown[:5]:
+                            countdown = detect_countdown(
+                                ev.get("title",""), ev.get("title",""),
+                                ev.get("published","")
+                            )
+                            if countdown:
+                                break
+
+                        # Build supplier list for searching
+                        all_sup_list = suppliers_df.to_dict("records")
+                        # Normalise column names
+                        norm = []
+                        for s in all_sup_list:
+                            norm.append({
+                                "supplier_name": s.get("supplier_name") or s.get("Supplier Name",""),
+                                "category":      s.get("category") or s.get("Category",""),
+                                "country":       s.get("country") or s.get("Country",""),
+                                "city":          s.get("city") or s.get("City",""),
+                                "tier":          s.get("tier") or s.get("Tier",""),
+                                "risk_score":    s.get("risk_score", 0),
+                                "risk_level":    s.get("risk_level", "Low"),
+                                "latitude":      s.get("latitude"),
+                                "longitude":     s.get("longitude"),
+                            })
+
+                        at_risk = {
+                            "supplier_name": name, "category": category,
+                            "country": country, "city": city,
+                            "latitude": row.get("latitude"), "longitude": row.get("longitude"),
+                        }
+                        st.session_state[alt_key] = find_alternatives(
+                            at_risk, norm,
+                            risk_reason=f"Risk score {score:.0f}/100 ({level})",
+                            countdown_event=countdown,
+                        )
+
+                    alt = st.session_state.get(alt_key)
+                    if alt:
+                        URGENCY_COLORS = {"immediate": "#ef4444", "this_week": "#f59e0b", "plan_ahead": "#3b82f6"}
+                        urg_color = URGENCY_COLORS.get(alt["urgency"], "#64748b")
+                        urg_label = {"immediate":"🚨 IMMEDIATE ACTION", "this_week":"⚠️ ACT THIS WEEK", "plan_ahead":"📋 PLAN AHEAD"}.get(alt["urgency"],"")
+
+                        # Countdown banner if detected
+                        if alt.get("countdown"):
+                            cd = alt["countdown"]
+                            days_left = cd.days_remaining
+                            bar_color = "#ef4444" if days_left <= 3 else "#f59e0b" if days_left <= 10 else "#3b82f6"
+                            bar_pct   = max(0, min(100, int((1 - days_left/30)*100))) if days_left >= 0 else 100
+                            st.markdown(f"""
+                            <div style="background:#1a0a0a;border:1px solid #7f1d1d;border-left:4px solid {bar_color};
+                                        border-radius:8px;padding:14px;margin-bottom:12px;">
+                                <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                                    <span style="color:{bar_color};font-size:0.75rem;font-weight:700;letter-spacing:0.08em">
+                                        ⏳ COUNTDOWN EVENT DETECTED
+                                    </span>
+                                    <span style="color:{bar_color};font-weight:700">
+                                        {"TODAY" if days_left == 0 else f"DEADLINE PASSED" if days_left < 0 else f"{days_left} DAYS REMAINING"}
+                                    </span>
+                                </div>
+                                <p style="color:#fca5a5;margin:0 0 6px 0;font-size:0.87rem;font-weight:600">
+                                    {cd.headline[:120]}
+                                </p>
+                                <div style="color:#94a3b8;font-size:0.78rem;margin-bottom:8px">
+                                    📅 Published: {cd.published_date.strftime("%b %d")}
+                                    &nbsp;·&nbsp; ⏰ Deadline: {cd.deadline_date.strftime("%b %d, %Y")}
+                                    &nbsp;·&nbsp; 🎯 Confidence: {cd.confidence}%
+                                    &nbsp;·&nbsp; Type: {cd.risk_type.replace("_"," ").title()}
+                                </div>
+                                <div style="background:#1f0a0a;border-radius:4px;padding:8px;font-size:0.82rem;color:#fca5a5">
+                                    💥 {cd.supply_chain_impact[:300]}
+                                </div>
+                                <div style="background:#374151;border-radius:4px;height:6px;margin-top:8px">
+                                    <div style="background:{bar_color};height:6px;border-radius:4px;width:{bar_pct}%"></div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        # Recommendation banner
+                        st.markdown(f"""
+                        <div style="background:#1e293b;border:1px solid #334155;border-left:4px solid {urg_color};
+                                    border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+                            <div style="color:{urg_color};font-size:0.75rem;font-weight:700;margin-bottom:4px">
+                                {urg_label}
+                            </div>
+                            <p style="color:#f1f5f9;margin:0;font-size:0.87rem">{alt["recommendation"]}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Internal alternatives (from your own list)
+                        if alt["internal_alternatives"]:
+                            st.markdown("**✅ Already in your supplier list — lower risk:**")
+                            for a in alt["internal_alternatives"]:
+                                tier_labels = {1:"🟢 Very Stable", 2:"🟡 Mostly Stable", 3:"🟠 Elevated", 4:"🔴 High Risk"}
+                                tier_label  = tier_labels.get(a.get("risk_tier",3), "⚪ Unknown")
+                                dist_note   = f" · {a['distance_km']:,} km away" if a.get("distance_km") else ""
+                                st.markdown(f"""
+                                <div style="background:#0f172a;border:1px solid #1e293b;border-left:4px solid #22c55e;
+                                            border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+                                    <div style="color:#22c55e;font-weight:700">✅ {a["supplier_name"]}</div>
+                                    <div style="color:#94a3b8;font-size:0.82rem;margin-top:3px">
+                                        📍 {a["city"]}, {a["country"]}{dist_note}
+                                        &nbsp;·&nbsp; {a["category"]} · Tier {a["tier"]}
+                                        &nbsp;·&nbsp; Risk: {a["risk_score"]:.0f}/100 ({a["risk_level"]})
+                                        &nbsp;·&nbsp; {tier_label}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        else:
+                            st.caption("No lower-risk supplier found in your current list for this category.")
+
+                        # Regional suggestions
+                        if alt["regional_suggestions"]:
+                            st.markdown("**🌍 Recommended alternative sourcing regions:**")
+                            tier_colors = {1:"#22c55e", 2:"#84cc16", 3:"#f59e0b", 4:"#ef4444"}
+                            for sug in alt["regional_suggestions"]:
+                                tc = tier_colors.get(sug["risk_tier"], "#64748b")
+                                st.markdown(f"""
+                                <div style="background:#0f172a;border:1px solid #1e293b;border-left:4px solid {tc};
+                                            border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+                                    <div style="display:flex;justify-content:space-between;">
+                                        <span style="color:#f1f5f9;font-weight:600">🌍 {sug["country"]}</span>
+                                        <span style="color:{tc};font-size:0.75rem;font-weight:600">
+                                            {sug["tier_label"]}
+                                        </span>
+                                    </div>
+                                    <div style="color:#94a3b8;font-size:0.82rem;margin-top:4px">
+                                        {sug["reason"]}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
                     if st.button("✕ Close", key=f"close_{name}"):
                         st.session_state.pop("drill_supplier", None)
                         st.session_state.pop(rec_key, None)
+                        st.session_state.pop(alt_key, None)
                         st.rerun()
 
                 st.markdown("---")
