@@ -101,7 +101,7 @@ def _fetch_single_gdelt_query(query: str, default_country: str) -> list[dict]:
             "&mode=artlist&maxrecords=15&sort=DateDesc"
             "&format=json&timespan=480"  # Last 8 hours only — keeps it fast + relevant
         )
-        r = requests.get(url, headers={"User-Agent": "SupplierRiskDashboard/2.0"}, timeout=8)
+        r = requests.get(url, headers={"User-Agent": "SupplierRiskDashboard/2.0"}, timeout=6)
         if r.status_code != 200:
             return []
 
@@ -155,16 +155,28 @@ def fetch_gdelt_for_suppliers(suppliers: list[dict]) -> list[dict]:
         return []
 
     articles = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {
             executor.submit(_fetch_single_gdelt_query, q, c): c
             for q, c in queries
         }
-        for future in as_completed(futures, timeout=20):
-            try:
-                articles.extend(future.result())
-            except Exception:
-                continue
+        # Never let a timeout crash the whole app — collect whatever finished
+        done, pending = set(), set(futures.keys())
+        import time as _time
+        deadline = _time.time() + 25  # 25s hard wall
+        while pending and _time.time() < deadline:
+            newly_done = {f for f in pending if f.done()}
+            for f in newly_done:
+                try:
+                    articles.extend(f.result())
+                except Exception:
+                    pass
+            pending -= newly_done
+            if pending:
+                _time.sleep(0.3)
+        # Cancel anything still running
+        for f in pending:
+            f.cancel()
 
     return articles
 
@@ -345,15 +357,25 @@ def fetch_all_global_parallel(supplier_feeds: list[tuple] = None) -> list[dict]:
     all_feeds = WIRE_FEEDS + (supplier_feeds or [])
     articles  = []
 
-    with ThreadPoolExecutor(max_workers=40) as executor:
+    with ThreadPoolExecutor(max_workers=30) as executor:
         futures = {
             executor.submit(_parse_rss, name, url, country): (name, country)
             for name, url, country in all_feeds
         }
-        for future in as_completed(futures, timeout=25):
-            try:
-                articles.extend(future.result())
-            except Exception:
-                continue
+        import time as _t
+        deadline = _t.time() + 30
+        pending  = set(futures.keys())
+        while pending and _t.time() < deadline:
+            newly_done = {f for f in pending if f.done()}
+            for f in newly_done:
+                try:
+                    articles.extend(f.result())
+                except Exception:
+                    pass
+            pending -= newly_done
+            if pending:
+                _t.sleep(0.3)
+        for f in pending:
+            f.cancel()
 
     return articles
