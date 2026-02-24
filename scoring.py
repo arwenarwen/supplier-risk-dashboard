@@ -22,6 +22,7 @@ import pycountry
 import pycountry_convert as pc
 from datetime import datetime, timezone
 from database import get_all_events, update_supplier_risk, get_all_suppliers
+from city_geocoder import geocode_city_fast, geocode_city
 
 # ─── Thresholds ───────────────────────────────────────────────────────────────
 
@@ -258,6 +259,28 @@ CITY_COORDS = {
 
     # Brazil
     "santos": (-23.9619, -46.3042), "sao paulo": (-23.5505, -46.6333),
+    # Ukraine & Black Sea region
+    "kyiv": (50.4501, 30.5234), "kiev": (50.4501, 30.5234),
+    "kharkiv": (49.9935, 36.2304), "odesa": (46.4825, 30.7233),
+    "odessa": (46.4825, 30.7233), "dnipro": (48.4647, 35.0462),
+    "lviv": (49.8397, 24.0297), "zaporizhzhia": (47.8388, 35.1396),
+    "mariupol": (47.0951, 37.5397), "mykolaiv": (46.9750, 31.9946),
+    "chornomorsk": (46.3025, 30.6558), "pivdennyi": (46.6000, 31.2000),
+    # Russia
+    "moscow": (55.7558, 37.6173), "saint petersburg": (59.9343, 30.3351),
+    "novorossiysk": (44.7236, 37.7688), "vladivostok": (43.1332, 131.9113),
+    # Moldova / Romania / Black Sea
+    "constanta": (44.1598, 28.6348), "bucharest": (44.4268, 26.1025),
+    "chisinau": (47.0105, 28.8638),
+    # Central Asia (common sourcing region)
+    "almaty": (43.2220, 76.8512), "tashkent": (41.2995, 69.2401),
+    "baku": (40.4093, 49.8671), "tbilisi": (41.6938, 44.8015),
+    # Israel / Middle East conflict zone
+    "tel aviv": (32.0853, 34.7818), "haifa": (32.8191, 34.9983),
+    "ashdod": (31.7972, 34.6471), "beirut": (33.8938, 35.5018),
+    "amman": (31.9454, 35.9284), "baghdad": (33.3152, 44.3661),
+    "tehran": (35.6892, 51.3890), "muscat": (23.5880, 58.3829),
+
     "rio de janeiro": (-22.9068, -43.1729), "belem": (-1.4558, -48.5039),
     "manaus": (-3.1190, -60.0217), "fortaleza": (-3.7172, -38.5434),
 
@@ -280,17 +303,39 @@ def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float
 
 def extract_city_coords(text: str) -> tuple[float, float] | None:
     """
-    Scan article text for known city names and return the first match's coords.
-    Longer city names are checked first to avoid partial matches
-    (e.g., "New York" before "York").
+    Scan article text for city names and return the first match's coordinates.
+    Uses the dynamic geocoding cache — covers any city in any country.
+    Longer city names checked first to avoid partial matches.
     """
     if not text:
         return None
     text_lower = text.lower()
-    # Sort by length descending so longer names match first
+
+    # First check our static coords dict for instant lookup (most common cities)
     for city in sorted(CITY_COORDS.keys(), key=len, reverse=True):
         if city in text_lower:
             return CITY_COORDS[city]
+
+    # Then check the dynamic cache (cities seen in previous geocoding runs)
+    # Extract candidate city names using simple NLP: capitalized words 3+ chars
+    import re as _re
+    candidates = _re.findall(r'\b([A-Z][a-z]{2,}(?:\s[A-Z][a-z]{2,})?)\b', text)
+    for candidate in candidates:
+        if len(candidate) < 3:
+            continue
+        # Skip common non-city words
+        skip = {"The", "This", "That", "With", "From", "Into", "Over",
+                "After", "Before", "During", "Monday", "Tuesday", "Wednesday",
+                "Thursday", "Friday", "Saturday", "Sunday", "January",
+                "February", "March", "April", "June", "July", "August",
+                "September", "October", "November", "December",
+                "Reuters", "Bloomberg", "Associated", "Press", "News"}
+        if candidate in skip:
+            continue
+        coords = geocode_city_fast(candidate)
+        if coords:
+            return coords
+
     return None
 
 
