@@ -1,144 +1,506 @@
 """
-scoring.py - Rule-based risk scoring engine for suppliers.
-Scores are based on event proximity (country/region match).
-Optional: AI-enhanced scoring via OpenAI GPT.
+scoring.py - Geo-precise risk scoring engine v3.
+
+Key upgrade: city-level proximity scoring using haversine distance.
+- Events are matched to supplier cities, not just countries
+- A snowstorm in Boston does NOT affect a supplier in Los Angeles
+- Scoring zones:
+    < 50 miles  → Direct impact zone     (full score)
+    50-300 mi   → Regional impact zone   (60% score)
+    300-1000 mi → Same country, far away (25% score)
+    > 1000 mi   → Different region       (5% score)
+    Different country, no geo match      → 2% score (near zero)
+
+Events are also geocoded by extracting city mentions from their text,
+using a large built-in city→(lat,lon) lookup — no API calls needed.
 """
 
-import os
+import math
+import re
 import pandas as pd
 import pycountry
 import pycountry_convert as pc
+from datetime import datetime, timezone
 from database import get_all_events, update_supplier_risk, get_all_suppliers
 
-# Risk score weights
-SCORE_SAME_COUNTRY = 70
-SCORE_SAME_REGION = 40
-SCORE_ELSEWHERE = 10
-HIGH_RISK_THRESHOLD = 50
+# ─── Thresholds ───────────────────────────────────────────────────────────────
+
+HIGH_RISK_THRESHOLD   = 60
+MEDIUM_RISK_THRESHOLD = 26
+MAX_POINTS_PER_EVENT  = 25
+MAX_EVENTS_COUNTED    = 5
+
+# ─── Distance Scoring Zones (miles) ──────────────────────────────────────────
+
+ZONE_DIRECT   = 50     # Full impact
+ZONE_REGIONAL = 300    # Same metro region
+ZONE_NATIONAL = 1000   # Same country but far
+
+def distance_multiplier(miles: float) -> float:
+    """Convert distance in miles to a scoring multiplier."""
+    if miles <= ZONE_DIRECT:
+        return 1.0       # Same city / immediate area
+    elif miles <= ZONE_REGIONAL:
+        return 0.6       # Same region (e.g. east coast US)
+    elif miles <= ZONE_NATIONAL:
+        return 0.25      # Same country, different region
+    elif miles <= 3000:
+        return 0.08      # Neighboring country / same continent
+    else:
+        return 0.02      # Different continent entirely
+
+# ─── Signal Keywords ──────────────────────────────────────────────────────────
+
+HIGH_SIGNAL_KEYWORDS = [
+    "port closure", "port closed", "port strike", "dock strike",
+    "earthquake", "tsunami", "typhoon", "hurricane", "cyclone",
+    "factory fire", "explosion", "factory shutdown", "plant shutdown",
+    "sanctions", "export ban", "import ban", "trade blockade",
+    "war", "military", "invasion", "blockade",
+    "canal blocked", "suez", "panama canal",
+    "power outage", "blackout", "energy crisis",
+    "flood", "severe flooding", "landslide",
+]
+
+MEDIUM_SIGNAL_KEYWORDS = [
+    "strike", "walkout", "protest", "labor dispute",
+    "shortage", "supply shortage",
+    "delay", "port delay", "shipping delay",
+    "disruption", "supply disruption",
+    "tariff", "trade war",
+    "storm", "typhoon warning", "snowstorm", "blizzard",
+]
+
+SEVERITY_MULTIPLIER = {"high": 1.0, "medium": 0.5, "low": 0.2}
+
+# ─── City Coordinate Lookup ───────────────────────────────────────────────────
+# Large built-in dict: city name (lowercase) → (lat, lon)
+# Covers major sourcing cities, port cities, and regional centers worldwide
+
+CITY_COORDS = {
+    # USA
+    "los angeles": (34.0522, -118.2437), "long beach": (33.7701, -118.1937),
+    "new york": (40.7128, -74.0060), "new york city": (40.7128, -74.0060),
+    "boston": (42.3601, -71.0589), "chicago": (41.8781, -87.6298),
+    "houston": (29.7604, -95.3698), "miami": (25.7617, -80.1918),
+    "seattle": (47.6062, -122.3321), "san francisco": (37.7749, -122.4194),
+    "detroit": (42.3314, -83.0458), "atlanta": (33.7490, -84.3880),
+    "dallas": (32.7767, -96.7970), "phoenix": (33.4484, -112.0740),
+    "portland": (45.5051, -122.6750), "savannah": (32.0835, -81.0998),
+    "baltimore": (39.2904, -76.6122), "norfolk": (36.8508, -76.2859),
+    "new jersey": (40.0583, -74.4057), "newark": (40.7357, -74.1724),
+    "charleston": (32.7765, -79.9311), "jacksonville": (30.3322, -81.6557),
+    "memphis": (35.1495, -90.0490), "new orleans": (29.9511, -90.0715),
+    "minneapolis": (44.9778, -93.2650), "kansas city": (39.0997, -94.5786),
+    "denver": (39.7392, -104.9903), "salt lake city": (40.7608, -111.8910),
+    "las vegas": (36.1699, -115.1398), "san diego": (32.7157, -117.1611),
+    "washington dc": (38.9072, -77.0369), "washington": (38.9072, -77.0369),
+    "philadelphia": (39.9526, -75.1652), "pittsburgh": (40.4406, -79.9959),
+    "cleveland": (41.4993, -81.6944), "cincinnati": (39.1031, -84.5120),
+    "st louis": (38.6270, -90.1994), "nashville": (36.1627, -86.7816),
+
+    # China
+    "shanghai": (31.2304, 121.4737), "beijing": (39.9042, 116.4074),
+    "shenzhen": (22.5431, 114.0579), "guangzhou": (23.1291, 113.2644),
+    "tianjin": (39.3434, 117.3616), "qingdao": (36.0671, 120.3826),
+    "ningbo": (29.8683, 121.5440), "wuhan": (30.5928, 114.3055),
+    "chengdu": (30.5728, 104.0668), "xian": (34.3416, 108.9398),
+    "dalian": (38.9140, 121.6147), "xiamen": (24.4798, 118.0894),
+    "nanjing": (32.0603, 118.7969), "hangzhou": (30.2741, 120.1551),
+    "suzhou": (31.2990, 120.5853), "dongguan": (23.0207, 113.7518),
+    "foshan": (23.0219, 113.1215), "zhengzhou": (34.7466, 113.6253),
+    "hong kong": (22.3193, 114.1694), "macau": (22.1987, 113.5439),
+
+    # Vietnam
+    "ho chi minh city": (10.8231, 106.6297), "ho chi minh": (10.8231, 106.6297),
+    "saigon": (10.8231, 106.6297), "hanoi": (21.0285, 105.8542),
+    "haiphong": (20.8449, 106.6881), "da nang": (16.0544, 108.2022),
+    "bien hoa": (10.9574, 106.8426), "can tho": (10.0452, 105.7469),
+
+    # Indonesia
+    "jakarta": (-6.2088, 106.8456), "surabaya": (-7.2575, 112.7521),
+    "bandung": (-6.9175, 107.6191), "medan": (3.5952, 98.6722),
+    "batam": (1.0456, 104.0305), "semarang": (-6.9932, 110.4203),
+
+    # India
+    "mumbai": (19.0760, 72.8777), "delhi": (28.7041, 77.1025),
+    "new delhi": (28.6139, 77.2090), "chennai": (13.0827, 80.2707),
+    "kolkata": (22.5726, 88.3639), "bangalore": (12.9716, 77.5946),
+    "bengaluru": (12.9716, 77.5946), "hyderabad": (17.3850, 78.4867),
+    "pune": (18.5204, 73.8567), "ahmedabad": (23.0225, 72.5714),
+    "surat": (21.1702, 72.8311), "nhava sheva": (18.9500, 72.9500),
+    "jnpt": (18.9500, 72.9500), "kochi": (9.9312, 76.2673),
+
+    # Bangladesh
+    "dhaka": (23.8103, 90.4125), "chittagong": (22.3569, 91.7832),
+    "gazipur": (23.9999, 90.4203), "narayanganj": (23.6238, 90.4994),
+
+    # Thailand
+    "bangkok": (13.7563, 100.5018), "laem chabang": (13.0957, 100.8924),
+    "chiang mai": (18.7883, 98.9853), "rayong": (12.6814, 101.2816),
+
+    # Malaysia
+    "kuala lumpur": (3.1390, 101.6869), "port klang": (3.0000, 101.3833),
+    "penang": (5.4164, 100.3327), "johor bahru": (1.4927, 103.7414),
+    "iskandar": (1.4655, 103.7578),
+
+    # Philippines
+    "manila": (14.5995, 120.9842), "cebu": (10.3157, 123.8854),
+    "davao": (7.1907, 125.4553), "clark": (15.1800, 120.5600),
+
+    # Pakistan
+    "karachi": (24.8607, 67.0011), "lahore": (31.5204, 74.3587),
+    "faisalabad": (31.4504, 73.1350), "islamabad": (33.6844, 73.0479),
+    "sialkot": (32.4945, 74.5229),
+
+    # Sri Lanka
+    "colombo": (6.9271, 79.8612), "kandy": (7.2906, 80.6337),
+
+    # Myanmar
+    "yangon": (16.8661, 96.1951), "mandalay": (21.9588, 96.0891),
+
+    # Cambodia
+    "phnom penh": (11.5564, 104.9282), "sihanoukville": (10.6278, 103.5228),
+
+    # South Korea
+    "busan": (35.1796, 129.0756), "seoul": (37.5665, 126.9780),
+    "incheon": (37.4563, 126.7052), "ulsan": (35.5384, 129.3114),
+
+    # Japan
+    "tokyo": (35.6762, 139.6503), "osaka": (34.6937, 135.5023),
+    "yokohama": (35.4437, 139.6380), "nagoya": (35.1815, 136.9066),
+    "kobe": (34.6901, 135.1955), "fukuoka": (33.5904, 130.4017),
+    "sendai": (38.2688, 140.8721),
+
+    # Taiwan
+    "taipei": (25.0330, 121.5654), "kaohsiung": (22.6273, 120.3014),
+    "taichung": (24.1477, 120.6736), "tainan": (22.9998, 120.2269),
+
+    # Singapore
+    "singapore": (1.3521, 103.8198),
+
+    # UAE
+    "dubai": (25.2048, 55.2708), "abu dhabi": (24.4539, 54.3773),
+    "sharjah": (25.3573, 55.4033), "jebel ali": (24.9964, 55.0542),
+
+    # Saudi Arabia
+    "jeddah": (21.4858, 39.1925), "riyadh": (24.6877, 46.7219),
+    "dammam": (26.4207, 50.0888),
+
+    # Turkey
+    "istanbul": (41.0082, 28.9784), "izmir": (38.4192, 27.1287),
+    "ankara": (39.9334, 32.8597), "bursa": (40.1885, 29.0610),
+    "mersin": (36.8000, 34.6333), "adana": (37.0000, 35.3213),
+
+    # Egypt
+    "cairo": (30.0444, 31.2357), "suez": (29.9668, 32.5498),
+    "alexandria": (31.2001, 29.9187), "port said": (31.2565, 32.2841),
+
+    # Morocco
+    "casablanca": (33.5731, -7.5898), "tangier": (35.7595, -5.8340),
+    "rabat": (34.0209, -6.8416),
+
+    # Nigeria
+    "lagos": (6.5244, 3.3792), "apapa": (6.4490, 3.3636),
+    "abuja": (9.0765, 7.3986), "kano": (12.0022, 8.5920),
+
+    # South Africa
+    "durban": (-29.8587, 31.0218), "cape town": (-33.9249, 18.4241),
+    "johannesburg": (-26.2041, 28.0473), "port elizabeth": (-33.9608, 25.6022),
+
+    # Kenya
+    "mombasa": (-4.0435, 39.6682), "nairobi": (-1.2921, 36.8219),
+
+    # Germany
+    "hamburg": (53.5753, 10.0153), "frankfurt": (50.1109, 8.6821),
+    "munich": (48.1351, 11.5820), "berlin": (52.5200, 13.4050),
+    "bremen": (53.0793, 8.8017), "dusseldorf": (51.2217, 6.7762),
+    "cologne": (50.9333, 6.9500), "stuttgart": (48.7758, 9.1829),
+
+    # Netherlands
+    "rotterdam": (51.9244, 4.4777), "amsterdam": (52.3676, 4.9041),
+    "eindhoven": (51.4416, 5.4697),
+
+    # Spain
+    "barcelona": (41.3851, 2.1734), "valencia": (39.4699, -0.3763),
+    "madrid": (40.4168, -3.7038), "bilbao": (43.2630, -2.9350),
+    "algeciras": (36.1408, -5.4536),
+
+    # Italy
+    "genoa": (44.4056, 8.9463), "naples": (40.8518, 14.2681),
+    "milan": (45.4654, 9.1859), "rome": (41.9028, 12.4964),
+    "trieste": (45.6495, 13.7768), "venice": (45.4408, 12.3155),
+
+    # France
+    "le havre": (49.4938, 0.1077), "marseille": (43.2965, 5.3698),
+    "paris": (48.8566, 2.3522), "lyon": (45.7640, 4.8357),
+
+    # UK
+    "london": (51.5074, -0.1278), "felixstowe": (51.9600, 1.3500),
+    "southampton": (50.9097, -1.4044), "liverpool": (53.4084, -2.9916),
+    "bristol": (51.4545, -2.5879), "birmingham": (52.4862, -1.8904),
+
+    # Belgium
+    "antwerp": (51.2194, 4.4025), "brussels": (50.8503, 4.3517),
+    "ghent": (51.0543, 3.7174),
+
+    # Poland
+    "gdansk": (54.3520, 18.6466), "warsaw": (52.2297, 21.0122),
+
+    # Greece
+    "piraeus": (37.9422, 23.6475), "athens": (37.9838, 23.7275),
+    "thessaloniki": (40.6401, 22.9444),
+
+    # Mexico
+    "manzanillo": (19.1223, -104.3140), "veracruz": (19.1738, -96.1342),
+    "mexico city": (19.4326, -99.1332), "guadalajara": (20.6597, -103.3496),
+    "monterrey": (25.6866, -100.3161), "tijuana": (32.5149, -117.0382),
+
+    # Brazil
+    "santos": (-23.9619, -46.3042), "sao paulo": (-23.5505, -46.6333),
+    "rio de janeiro": (-22.9068, -43.1729), "belem": (-1.4558, -48.5039),
+    "manaus": (-3.1190, -60.0217), "fortaleza": (-3.7172, -38.5434),
+
+    # Canada
+    "vancouver": (49.2827, -123.1207), "toronto": (43.6532, -79.3832),
+    "montreal": (45.5017, -73.5673), "halifax": (44.6488, -63.5752),
+    "prince rupert": (54.3150, -130.3208),
+}
+
+
+def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance in miles between two lat/lon points."""
+    R = 3958.8  # Earth radius in miles
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def extract_city_coords(text: str) -> tuple[float, float] | None:
+    """
+    Scan article text for known city names and return the first match's coords.
+    Longer city names are checked first to avoid partial matches
+    (e.g., "New York" before "York").
+    """
+    if not text:
+        return None
+    text_lower = text.lower()
+    # Sort by length descending so longer names match first
+    for city in sorted(CITY_COORDS.keys(), key=len, reverse=True):
+        if city in text_lower:
+            return CITY_COORDS[city]
+    return None
+
+
+def recency_weight(published_date_str: str) -> float:
+    """Weight between 0.1–1.0 based on how recent the event is."""
+    if not published_date_str:
+        return 0.5
+    try:
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                    "%a, %d %b %Y %H:%M:%S %z", "%Y%m%dT%H%M%SZ",
+                    "%Y-%m-%dT%H:%M:%S.%fZ"):
+            try:
+                pub = datetime.strptime(published_date_str[:26], fmt)
+                break
+            except Exception:
+                continue
+        else:
+            return 0.5
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
+        if age_hours <= 24:    return 1.0
+        elif age_hours <= 72:  return 0.7
+        elif age_hours <= 168: return 0.4
+        else:                  return 0.1
+    except Exception:
+        return 0.5
+
+
+def classify_signal(title: str, description: str = "") -> str:
+    text = f"{title} {description}".lower()
+    if any(kw in text for kw in HIGH_SIGNAL_KEYWORDS): return "high"
+    if any(kw in text for kw in MEDIUM_SIGNAL_KEYWORDS): return "medium"
+    return "low"
 
 
 def get_continent(country_name: str) -> str | None:
-    """Map a country name to its continent code."""
     try:
         country = pycountry.countries.lookup(country_name)
-        alpha2 = country.alpha_2
-        continent_code = pc.country_alpha2_to_continent_code(alpha2)
-        return continent_code
+        return pc.country_alpha2_to_continent_code(country.alpha_2)
     except Exception:
         return None
 
 
-def score_supplier(supplier_country: str, events_df: pd.DataFrame) -> tuple[float, str]:
+# ─── Core Scorer ─────────────────────────────────────────────────────────────
+
+def score_supplier(
+    supplier_country: str,
+    supplier_lat: float | None,
+    supplier_lon: float | None,
+    supplier_city: str,
+    events_df: pd.DataFrame
+) -> tuple[float, str]:
     """
-    Calculate risk score for a supplier based on events DataFrame.
-    Returns (risk_score, event_summary_string).
+    Score a supplier using geo-precise distance-based matching.
+
+    For each event:
+      1. Try to extract city coordinates from the article text
+      2. If supplier is geocoded: compute haversine distance → distance multiplier
+      3. If no city found in article: fall back to country/continent match
+      4. Multiply by signal quality and recency
+      5. Top 5 events contribute; each capped at 25 pts
     """
     if events_df.empty:
         return 0.0, "No events detected."
 
-    total_score = 0.0
-    matched_events = []
     supplier_continent = get_continent(supplier_country)
+    has_geocode = supplier_lat is not None and supplier_lon is not None
+
+    # Also get supplier city coords from our lookup as a fallback
+    supplier_city_coords = CITY_COORDS.get(str(supplier_city).lower())
+
+    # Use geocoded coords if available, else lookup
+    if has_geocode:
+        sup_lat, sup_lon = supplier_lat, supplier_lon
+    elif supplier_city_coords:
+        sup_lat, sup_lon = supplier_city_coords
+    else:
+        sup_lat, sup_lon = None, None
+
+    scored_events = []
 
     for _, event in events_df.iterrows():
-        event_country = str(event.get("detected_country", "Unknown"))
-        title = str(event.get("title", ""))
+        title       = str(event.get("title", ""))
+        description = str(event.get("description", ""))
+        published   = str(event.get("published_date", ""))
+        event_country = str(event.get("detected_country", "Unknown")).strip()
+        full_text   = f"{title} {description}"
 
-        if event_country == "Unknown" or not event_country:
-            total_score += SCORE_ELSEWHERE
-            continue
+        # ── Step 1: Try to find exact city coords in the article ──
+        event_coords = extract_city_coords(full_text)
 
-        if event_country.strip().lower() == supplier_country.strip().lower():
-            # Same country = highest risk
-            total_score += SCORE_SAME_COUNTRY
-            matched_events.append(f"[SAME COUNTRY] {title[:80]}")
-        else:
+        if event_coords and sup_lat is not None:
+            # Best case: both supplier and event have coordinates
+            miles = haversine_miles(sup_lat, sup_lon, event_coords[0], event_coords[1])
+            dist_mult = distance_multiplier(miles)
+            proximity_label = f"{int(miles)} miles away"
+            base = 25.0
+
+        elif event_country.lower() == supplier_country.lower():
+            # Same country but no city extracted — use national-level fallback
+            # Assign a default "far within country" distance
+            base = 25.0
+            dist_mult = 0.15   # Assume it's far unless we know better
+            proximity_label = f"Same country ({supplier_country}) — location unknown"
+
+        elif event_country not in ("Unknown", "Global", ""):
             event_continent = get_continent(event_country)
             if event_continent and event_continent == supplier_continent:
-                # Same region/continent
-                total_score += SCORE_SAME_REGION
-                matched_events.append(f"[SAME REGION] {title[:80]}")
+                base = 25.0
+                dist_mult = 0.05
+                proximity_label = f"Same continent ({event_country})"
             else:
-                # Elsewhere
-                total_score += SCORE_ELSEWHERE
+                base = 25.0
+                dist_mult = 0.02
+                proximity_label = f"Distant ({event_country})"
+        else:
+            base = 25.0
+            dist_mult = 0.01
+            proximity_label = "Global/Unknown location"
 
-    # Cap total score at 100
-    final_score = min(round(total_score, 1), 100.0)
+        # ── Step 2: Signal quality ──
+        signal      = classify_signal(title, description)
+        sev_mult    = SEVERITY_MULTIPLIER.get(signal, 0.2)
 
-    # Build summary (top 3 most relevant events)
-    summary = "; ".join(matched_events[:3]) if matched_events else "No direct country/region events."
-    return final_score, summary
+        # ── Step 3: Recency ──
+        time_mult   = recency_weight(published)
+
+        # ── Final per-event score ──
+        event_score = base * dist_mult * sev_mult * time_mult
+        event_score = min(event_score, MAX_POINTS_PER_EVENT)
+
+        if event_score > 0.3:
+            scored_events.append({
+                "score":     event_score,
+                "label":     proximity_label,
+                "signal":    signal,
+                "title":     title,
+                "dist_mult": dist_mult,
+            })
+
+    # Top N events only
+    scored_events.sort(key=lambda x: x["score"], reverse=True)
+    top_events = scored_events[:MAX_EVENTS_COUNTED]
+    total_score = sum(e["score"] for e in top_events)
+
+    # Normalize to 0–100
+    max_possible = MAX_EVENTS_COUNTED * MAX_POINTS_PER_EVENT
+    normalized = min(round((total_score / max_possible) * 100, 1), 100.0)
+
+    # Build summary — only show events that actually scored meaningfully
+    meaningful = [e for e in top_events if e["dist_mult"] >= 0.15]
+    if meaningful:
+        summary = "; ".join(
+            f"[{e['signal'].upper()} · {e['label']}] {e['title'][:70]}"
+            for e in meaningful[:3]
+        )
+    elif top_events:
+        summary = f"No nearby events. Global monitoring active."
+    else:
+        summary = "No significant disruption events detected."
+
+    return normalized, summary
 
 
 def classify_risk_level(score: float) -> str:
-    """Return human-readable risk level based on score."""
-    if score > HIGH_RISK_THRESHOLD:
-        return "High"
-    elif score > 25:
-        return "Medium"
+    if score >= HIGH_RISK_THRESHOLD:   return "High"
+    elif score >= MEDIUM_RISK_THRESHOLD: return "Medium"
     return "Low"
 
 
 def run_scoring_engine() -> pd.DataFrame:
-    """
-    Score all suppliers against all events.
-    Updates the database and returns the updated suppliers DataFrame.
-    """
+    """Score all suppliers using geo-precise distance matching."""
     suppliers_df = get_all_suppliers()
-    events_df = get_all_events()
+    events_df    = get_all_events()
 
     if suppliers_df.empty:
         return suppliers_df
 
     for _, row in suppliers_df.iterrows():
-        supplier_name = row["supplier_name"]
-        supplier_country = str(row.get("country", ""))
-
-        score, summary = score_supplier(supplier_country, events_df)
+        score, summary = score_supplier(
+            supplier_country = str(row.get("country", "")),
+            supplier_lat     = row.get("latitude"),
+            supplier_lon     = row.get("longitude"),
+            supplier_city    = str(row.get("city", "")),
+            events_df        = events_df
+        )
         level = classify_risk_level(score)
-
-        update_supplier_risk(supplier_name, score, level, summary)
+        update_supplier_risk(row["supplier_name"], score, level, summary)
 
     return get_all_suppliers()
 
 
-# ─── Optional: AI-Enhanced Scoring via OpenAI ────────────────────────────────
+# ─── Optional: AI-Enhanced Scoring ───────────────────────────────────────────
 
 def ai_parse_event(event_text: str, openai_api_key: str) -> dict:
-    """
-    Use OpenAI GPT to classify whether a news event is likely to disrupt supply.
-    Returns dict with: disruption_likely, country, severity.
-    Falls back gracefully if API unavailable.
-
-    Placeholder for future ML/LLM integration.
-    """
     if not openai_api_key:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
-
     try:
-        import openai
+        import openai, json
         client = openai.OpenAI(api_key=openai_api_key)
-
-        prompt = f"""Analyze this news article excerpt and respond in JSON format only.
-Article: "{event_text}"
-
-Respond with:
-{{
-  "disruption_likely": "Yes" or "No",
-  "country": "country name or Unknown",
-  "severity": "low", "medium", or "high"
-}}"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Cost-efficient model
+        prompt = (f'Analyze this news excerpt. Respond ONLY in JSON.\n'
+                  f'Article: "{event_text}"\n'
+                  f'{{"disruption_likely":"Yes/No","country":"name or Unknown","severity":"low/medium/high"}}')
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0
+            max_tokens=100, temperature=0
         )
-
-        import json
-        content = response.choices[0].message.content.strip()
-        return json.loads(content)
-
-    except Exception as e:
+        return json.loads(r.choices[0].message.content.strip())
+    except Exception:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
+
