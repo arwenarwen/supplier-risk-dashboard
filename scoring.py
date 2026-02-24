@@ -339,31 +339,288 @@ def extract_city_coords(text: str) -> tuple[float, float] | None:
     return None
 
 
-def recency_weight(published_date_str: str) -> float:
-    """Weight between 0.1–1.0 based on how recent the event is."""
+# ─── Time Window: Pure Forward-Looking ──────────────────────────────────────
+#
+# Core philosophy: score what WILL affect your supplier, not what already did.
+#
+# THREE signal types drive scoring:
+#
+#  1. FORECAST signals (2.0×) — explicit future warnings, still time to act
+#     "typhoon warning issued", "strike vote scheduled", "sanctions expected"
+#
+#  2. ACTIVE/PERSISTENT signals — started recently, future impact still real
+#     <48h: 1.0×  |  2–7 days: 0.7× (persistent) / 0.3× (fast)
+#     7–30 days: 0.5× (persistent only, e.g. war/sanctions) / 0.0×
+#     >30 days: 0.0× always
+#
+#  3. SEASONAL/SCHEDULED signals — injected from calendar, no article needed
+#     Typhoon season, monsoon, election windows, labor cycles, harvest disruption
+#     Represented as synthetic events from SEASONAL_RISK_CALENDAR
+
+HIGH_SIGNAL_PERSISTENT = {
+    "war", "conflict", "invasion", "occupation", "sanctions", "embargo",
+    "blockade", "trade war", "export ban", "import ban", "military",
+    "armed conflict", "civil war", "coup", "trade restriction",
+    "tariff", "levy", "duty hike", "trade barrier",
+}
+
+FORECAST_SIGNALS = {
+    "warning issued", "watch issued", "alert issued", "advisory issued",
+    "tropical storm warning", "typhoon warning", "hurricane warning",
+    "cyclone warning", "flood warning", "storm surge warning",
+    "forecast", "expected to hit", "predicted to", "projected to",
+    "approaching", "will hit", "set to make landfall", "tracking toward",
+    "heading toward", "moving toward", "on course for",
+    "imminent", "impending", "expected to impose", "sanctions expected",
+    "proposed tariff", "new sanctions", "planned sanctions",
+    "threatened with", "considering sanctions", "mulling tariffs",
+    "upcoming strike", "planned strike", "announced strike", "strike vote",
+    "strike ballot", "walkout planned", "workers threatening",
+    "union negotiation", "contract expiry", "labor talks",
+    "scheduled closure", "planned maintenance", "port closure planned",
+    "in the next", "over the coming", "within days", "within weeks",
+    "risk of", "threat of", "danger of", "possibility of",
+    "election risk", "political uncertainty ahead",
+}
+
+
+def _parse_published(date_str: str):
+    """Parse a published date string into a UTC-aware datetime."""
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+        "%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT",
+        "%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+    ):
+        try:
+            pub = datetime.strptime(date_str[:26].strip(), fmt)
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            return pub
+        except Exception:
+            continue
+    return None
+
+
+def is_forecast(title: str, description: str = "") -> bool:
+    """Detect forward-looking articles warning of upcoming disruption."""
+    text = f"{title} {description}".lower()
+    return any(sig in text for sig in FORECAST_SIGNALS)
+
+
+def recency_weight(published_date_str: str, title: str = "", description: str = "") -> float:
+    """
+    Pure forward-looking time weight.
+
+    FORECAST article (warning/alert):      2.0  — Future threat, act NOW
+    Active / breaking (<48h):              1.0  — Ongoing situation
+    Unfolding (2–7 days):
+      Persistent (war/sanctions):          0.7  — Future impact still real
+      Fast-resolving (weather/strike):     0.3  — Mostly over
+    Sustained (7–30 days):
+      Persistent only:                     0.5  — Sanctions/war window open
+      Fast-resolving:                      0.0  — Ignored
+    >30 days:                              0.0  — Always ignored
+    """
     if not published_date_str:
         return 0.5
-    try:
-        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
-                    "%a, %d %b %Y %H:%M:%S %z", "%Y%m%dT%H%M%SZ",
-                    "%Y-%m-%dT%H:%M:%S.%fZ"):
-            try:
-                pub = datetime.strptime(published_date_str[:26], fmt)
-                break
-            except Exception:
-                continue
-        else:
-            return 0.5
-        if pub.tzinfo is None:
-            pub = pub.replace(tzinfo=timezone.utc)
-        age_hours = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
-        if age_hours <= 24:    return 1.0
-        elif age_hours <= 72:  return 0.7
-        elif age_hours <= 168: return 0.4
-        else:                  return 0.1
-    except Exception:
+
+    if is_forecast(title, description):
+        return 2.0
+
+    pub = _parse_published(published_date_str)
+    if pub is None:
         return 0.5
 
+    age_hours  = (datetime.now(timezone.utc) - pub).total_seconds() / 3600
+    if age_hours < 0:
+        return 2.0  # Future-dated / scheduled event
+
+    text       = f"{title} {description}".lower()
+    persistent = any(kw in text for kw in HIGH_SIGNAL_PERSISTENT)
+
+    if age_hours <= 48:
+        return 1.0
+    elif age_hours <= 168:
+        return 0.7 if persistent else 0.3
+    elif age_hours <= 720:
+        return 0.5 if persistent else 0.0
+    else:
+        return 0.0
+
+
+# ─── Seasonal & Scheduled Forward Risk Calendar ───────────────────────────────
+# Known future risks injected directly into scoring — no news article required.
+# A Manila supplier scores elevated in August even before any typhoon hits.
+
+SEASONAL_RISK_CALENDAR = [
+    # ── Typhoon / Cyclone ─────────────────────────────────────────────────────
+    {"countries": ["Philippines","Taiwan","Japan","China","Vietnam","South Korea"],
+     "months": [5,6,7,8,9,10,11], "peak_months": [8,9,10],
+     "signal": "high", "type": "🌀 Typhoon season — Western Pacific",
+     "weight": 0.7, "horizon_days": 30},
+    {"countries": ["Bangladesh","India","Myanmar","Sri Lanka","Thailand","Malaysia"],
+     "months": [4,5,10,11], "peak_months": [4,5,10,11],
+     "signal": "high", "type": "🌀 Cyclone season — Bay of Bengal",
+     "weight": 0.65, "horizon_days": 30},
+    {"countries": ["Pakistan","India","Bangladesh","Sri Lanka"],
+     "months": [6,7,8,9], "peak_months": [7,8],
+     "signal": "medium", "type": "🌧 Monsoon season — South Asia",
+     "weight": 0.5, "horizon_days": 30},
+    {"countries": ["United States","Mexico","Cuba","Haiti","Dominican Republic"],
+     "cities": ["houston","miami","new orleans","savannah","charleston",
+                "jacksonville","manzanillo","veracruz"],
+     "months": [6,7,8,9,10,11], "peak_months": [8,9,10],
+     "signal": "high", "type": "🌀 Atlantic hurricane season",
+     "weight": 0.6, "horizon_days": 30},
+    {"countries": ["Indonesia","Philippines","Fiji","Papua New Guinea",
+                   "Australia","Madagascar","Mozambique"],
+     "months": [11,12,1,2,3,4], "peak_months": [1,2,3],
+     "signal": "medium", "type": "🌀 Southern hemisphere cyclone season",
+     "weight": 0.5, "horizon_days": 30},
+    # ── Flooding ──────────────────────────────────────────────────────────────
+    {"countries": ["China","Vietnam","Thailand","Myanmar","Cambodia","Laos"],
+     "months": [6,7,8,9], "peak_months": [7,8],
+     "signal": "medium", "type": "🌊 Summer flooding — SE/East Asia",
+     "weight": 0.45, "horizon_days": 30},
+    {"countries": ["Spain","Italy","France","Greece"],
+     "cities": ["valencia","barcelona","genoa","marseille"],
+     "months": [10,11], "peak_months": [10,11],
+     "signal": "medium", "type": "🌊 DANA flash flood season — Mediterranean",
+     "weight": 0.55, "horizon_days": 20},
+    {"countries": ["Nigeria","Ghana","Cameroon","Ivory Coast","Senegal"],
+     "months": [6,7,8,9], "peak_months": [8,9],
+     "signal": "medium", "type": "🌧 West African monsoon / flooding",
+     "weight": 0.4, "horizon_days": 30},
+    {"countries": ["Brazil","Colombia","Peru","Ecuador"],
+     "months": [12,1,2,3], "peak_months": [1,2],
+     "signal": "medium", "type": "🌊 South American wet / flood season",
+     "weight": 0.4, "horizon_days": 30},
+    # ── Winter ────────────────────────────────────────────────────────────────
+    {"countries": ["Germany","Netherlands","Belgium","Poland","Denmark","Sweden"],
+     "months": [12,1,2], "peak_months": [1,2],
+     "signal": "low", "type": "❄️ North Sea / Baltic winter storm season",
+     "weight": 0.25, "horizon_days": 30},
+    {"countries": ["Canada","United States"],
+     "cities": ["chicago","detroit","cleveland","minneapolis",
+                "toronto","montreal","boston","new york"],
+     "months": [12,1,2,3], "peak_months": [1,2],
+     "signal": "low", "type": "❄️ North American winter storm / port freeze",
+     "weight": 0.25, "horizon_days": 20},
+    # ── Seismic ───────────────────────────────────────────────────────────────
+    {"countries": ["Turkey"],
+     "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [1,2,3],
+     "signal": "high", "type": "🏔 Seismic risk — North Anatolian Fault (year-round)",
+     "weight": 0.35, "horizon_days": 30},
+    {"countries": ["Taiwan","Japan","Philippines","Indonesia","Nepal","Pakistan"],
+     "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [3,4],
+     "signal": "medium", "type": "🏔 High seismic zone (year-round)",
+     "weight": 0.3, "horizon_days": 30},
+    # ── Labor / Strike Cycles ─────────────────────────────────────────────────
+    {"countries": ["Bangladesh"],
+     "months": [10,11,12,1], "peak_months": [11,12],
+     "signal": "high", "type": "✊ Bangladesh garment labor unrest — year-end wage negotiations",
+     "weight": 0.6, "horizon_days": 30},
+    {"countries": ["France","Belgium","Italy","Spain","Greece"],
+     "months": [3,4,9,10,11], "peak_months": [9,10],
+     "signal": "medium", "type": "✊ European autumn labor strike season",
+     "weight": 0.4, "horizon_days": 20},
+    {"countries": ["United States"],
+     "cities": ["los angeles","long beach","seattle","new york","houston","savannah"],
+     "months": [6,7,8,9,10], "peak_months": [7,8,9],
+     "signal": "medium", "type": "✊ US West Coast longshoremen contract cycle (ILWU)",
+     "weight": 0.4, "horizon_days": 30},
+    {"countries": ["South Africa"],
+     "months": [7,8,9,10], "peak_months": [8,9],
+     "signal": "medium", "type": "✊ South African mining / port strike season",
+     "weight": 0.4, "horizon_days": 20},
+    {"countries": ["India"],
+     "months": [1,2,11,12], "peak_months": [1,2],
+     "signal": "low", "type": "✊ Indian trade union general strike season",
+     "weight": 0.3, "horizon_days": 14},
+    # ── Elections / Political Instability ─────────────────────────────────────
+    {"countries": ["Nigeria","Kenya","Ghana","Zimbabwe","Democratic Republic of Congo"],
+     "months": [2,3,8,9,10,11], "peak_months": [2,3,10,11],
+     "signal": "medium", "type": "🗳 African election instability window",
+     "weight": 0.35, "horizon_days": 30},
+    {"countries": ["Pakistan","Bangladesh","Myanmar"],
+     "months": [1,2,11,12], "peak_months": [1,2],
+     "signal": "medium", "type": "🗳 South/SE Asian political instability window",
+     "weight": 0.35, "horizon_days": 30},
+    # ── Agricultural / Harvest ─────────────────────────────────────────────────
+    {"countries": ["Ukraine","Russia"],
+     "months": [6,7,8,9], "peak_months": [7,8],
+     "signal": "high", "type": "🌾 Black Sea grain harvest — conflict risk to export capacity",
+     "weight": 0.65, "horizon_days": 30},
+    {"countries": ["Brazil","Argentina"],
+     "months": [3,4,5], "peak_months": [4,5],
+     "signal": "low", "type": "🌾 South American soy/corn harvest — port congestion",
+     "weight": 0.3, "horizon_days": 20},
+    # ── Red Sea / Chokepoints ─────────────────────────────────────────────────
+    {"countries": ["Yemen","Egypt","Saudi Arabia","Djibouti","Eritrea","Somalia"],
+     "cities": ["suez","jeddah","aden","djibouti"],
+     "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [1,2,3,4,5,6],
+     "signal": "high", "type": "⚓ Red Sea / Bab-el-Mandeb — Houthi attack risk",
+     "weight": 0.75, "horizon_days": 30},
+    # ── Wildfire / Drought ────────────────────────────────────────────────────
+    {"countries": ["United States","Canada","Australia"],
+     "months": [6,7,8,9,10], "peak_months": [8,9],
+     "signal": "low", "type": "🔥 Wildfire season — logistics disruption risk",
+     "weight": 0.25, "horizon_days": 20},
+    {"countries": ["Morocco","Algeria","Spain","Italy","Greece","Portugal"],
+     "months": [7,8,9], "peak_months": [7,8],
+     "signal": "low", "type": "🔥 Mediterranean wildfire / drought season",
+     "weight": 0.25, "horizon_days": 20},
+]
+
+
+def get_forward_risk_signals(supplier_country: str, supplier_city: str) -> list[dict]:
+    """
+    Return synthetic forward-looking events from the seasonal calendar.
+    Injected into scoring alongside real news — no news article required.
+    Returns event dicts compatible with the scoring engine.
+    """
+    from datetime import date
+    current_month = date.today().month
+    signals       = []
+    city_lower    = supplier_city.lower().strip()
+    country_lower = supplier_country.lower().strip()
+
+    for entry in SEASONAL_RISK_CALENDAR:
+        countries_lower = [c.lower() for c in entry["countries"]]
+        if country_lower not in countries_lower:
+            continue
+
+        # City filter: if specified, supplier city must match
+        if "cities" in entry:
+            cities_lower = [c.lower() for c in entry["cities"]]
+            if not any(c in city_lower or city_lower in c for c in cities_lower):
+                continue
+
+        if current_month not in entry["months"]:
+            continue
+
+        is_peak = current_month in entry["peak_months"]
+        weight  = entry["weight"] if is_peak else entry["weight"] * 0.5
+
+        signals.append({
+            "title":            f"[SEASONAL] {entry['type']} — {supplier_country}",
+            "description":      (
+                f"Seasonal risk window active for {supplier_country}. "
+                f"{entry['type']}. Window: ~{entry['horizon_days']} days. "
+                f"{'PEAK risk period.' if is_peak else 'Approaching peak.'}"
+            ),
+            "source":           "Seasonal Risk Calendar",
+            "published_date":   datetime.now(timezone.utc).isoformat(),
+            "detected_country": supplier_country,
+            "event_type":       "seasonal",
+            "severity":         entry["signal"],
+            "_seasonal_weight": weight,
+            "_is_seasonal":     True,
+            "_horizon_days":    entry["horizon_days"],
+        })
+
+    return signals
 
 def classify_signal(title: str, description: str = "") -> str:
     text = f"{title} {description}".lower()
@@ -416,7 +673,27 @@ def score_supplier(
     else:
         sup_lat, sup_lon = None, None
 
+    # ── Inject seasonal/scheduled forward signals ────────────────────────────
+    seasonal_signals = get_forward_risk_signals(supplier_country, supplier_city)
+
     scored_events = []
+
+    # Process seasonal signals first (pre-weighted, distance is implicit)
+    for sig in seasonal_signals:
+        sev_mult   = SEVERITY_MULTIPLIER.get(sig["severity"], 0.2)
+        base_pts   = 25.0 * sig["_seasonal_weight"] * sev_mult
+        base_pts   = min(base_pts, MAX_POINTS_PER_EVENT)
+        if base_pts > 0.3:
+            scored_events.append({
+                "score":       base_pts,
+                "label":       f"Seasonal pattern — {supplier_city}, {supplier_country}",
+                "signal":      sig["severity"],
+                "title":       sig["title"],
+                "dist_mult":   sig["_seasonal_weight"],
+                "time_mult":   1.0,
+                "is_forecast": True,
+                "_is_seasonal": True,
+            })
 
     for _, event in events_df.iterrows():
         title       = str(event.get("title", ""))
@@ -461,8 +738,12 @@ def score_supplier(
         signal      = classify_signal(title, description)
         sev_mult    = SEVERITY_MULTIPLIER.get(signal, 0.2)
 
-        # ── Step 3: Recency ──
-        time_mult   = recency_weight(published)
+        # ── Step 3: Recency / Forward-looking weight ──
+        time_mult   = recency_weight(published, title, description)
+        # Skip events that are too old (recency_weight returns 0.0)
+        if time_mult == 0.0:
+            continue
+        is_fwd = time_mult > 1.0  # forecast/warning article
 
         # ── Final per-event score ──
         event_score = base * dist_mult * sev_mult * time_mult
@@ -470,11 +751,13 @@ def score_supplier(
 
         if event_score > 0.3:
             scored_events.append({
-                "score":     event_score,
-                "label":     proximity_label,
-                "signal":    signal,
-                "title":     title,
-                "dist_mult": dist_mult,
+                "score":       event_score,
+                "label":       proximity_label,
+                "signal":      signal,
+                "title":       title,
+                "dist_mult":   dist_mult,
+                "time_mult":   time_mult,
+                "is_forecast": time_mult > 1.0,
             })
 
     # Top N events only
@@ -558,6 +841,28 @@ def get_score_breakdown(
 
     breakdown = []
 
+    # Inject seasonal signals
+    for sig in get_forward_risk_signals(supplier_country, supplier_city):
+        sev_mult  = SEVERITY_MULTIPLIER.get(sig["severity"], 0.2)
+        pts       = min(25.0 * sig["_seasonal_weight"] * sev_mult, MAX_POINTS_PER_EVENT)
+        if pts > 0.1:
+            breakdown.append({
+                "title":          sig["title"],
+                "source":         "Seasonal Risk Calendar",
+                "published":      "Ongoing",
+                "event_country":  supplier_country,
+                "signal":         sig["severity"],
+                "proximity":      f"Seasonal pattern — {supplier_city}, {supplier_country}",
+                "miles":          None,
+                "dist_mult":      round(sig["_seasonal_weight"], 3),
+                "sev_mult":       sev_mult,
+                "time_mult":      1.0,
+                "points":         round(pts, 2),
+                "counted":        False,
+                "is_forecast":    True,
+                "_is_seasonal":   True,
+            })
+
     for _, event in events_df.iterrows():
         title         = str(event.get("title", ""))
         description   = str(event.get("description", ""))
@@ -588,9 +893,13 @@ def get_score_breakdown(
             dist_mult = 0.01
             proximity_label = "Unknown location"
 
-        signal   = classify_signal(title, description)
-        sev_mult = SEVERITY_MULTIPLIER.get(signal, 0.2)
-        time_mult = recency_weight(published)
+        signal    = classify_signal(title, description)
+        sev_mult  = SEVERITY_MULTIPLIER.get(signal, 0.2)
+        time_mult = recency_weight(published, title, description)
+
+        # Skip events too old to matter
+        if time_mult == 0.0:
+            continue
 
         event_score = min(25.0 * dist_mult * sev_mult * time_mult, MAX_POINTS_PER_EVENT)
 
@@ -607,7 +916,8 @@ def get_score_breakdown(
                 "sev_mult":       sev_mult,
                 "time_mult":      round(time_mult, 2),
                 "points":         round(event_score, 2),
-                "counted":        False,  # will be marked below
+                "counted":        False,
+                "is_forecast":    time_mult > 1.0,
             })
 
     # Sort and mark which events actually count (top 5)
