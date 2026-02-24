@@ -335,6 +335,19 @@ def _parse_rss(source_name: str, url: str, default_country: str) -> list[dict]:
                          item.find("{http://www.w3.org/2005/Atom}updated"))
             published = pub_el.text.strip() if pub_el is not None and pub_el.text else datetime.utcnow().isoformat()
 
+            # Extract article URL
+            link_el = (item.find("link") or
+                       item.find("{http://www.w3.org/2005/Atom}link"))
+            url = ""
+            if link_el is not None:
+                # Atom <link href="..."> vs RSS <link>text</link>
+                url = link_el.get("href", "") or (link_el.text or "").strip()
+            # Google News wraps URLs — unwrap if needed
+            if url and "news.google.com" in url and "url=" in url:
+                import urllib.parse as _up
+                qs = _up.parse_qs(_up.urlparse(url).query)
+                url = qs.get("url", [url])[0]
+
             if not title:
                 continue
 
@@ -345,6 +358,7 @@ def _parse_rss(source_name: str, url: str, default_country: str) -> list[dict]:
                 "published_date": published,
                 "country":        default_country,
                 "event_type":     "news",
+                "url":            url,
             })
 
         return articles
