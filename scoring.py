@@ -735,11 +735,13 @@ def score_supplier(
             base = 25.0
 
         elif event_country.lower() == supplier_country.lower():
-            # Same country but no city extracted — use national-level fallback
-            # Assign a default "far within country" distance
+            # Event is IN the supplier's country — direct national impact
+            # This is a strong match. Use 0.6x — meaningful but below city-level precision.
+            # High-signal events (war, sanctions, strikes) in the same country
+            # affect ALL suppliers in that country, not just one city.
             base = 25.0
-            dist_mult = 0.15   # Assume it's far unless we know better
-            proximity_label = f"Same country ({supplier_country}) — location unknown"
+            dist_mult = 0.6
+            proximity_label = f"National impact — {supplier_country}"
 
         elif event_country not in ("Unknown", "Global", ""):
             event_continent = get_continent(event_country)
@@ -757,7 +759,11 @@ def score_supplier(
             proximity_label = "Global/Unknown location"
 
         # ── Step 2: Signal quality ──
-        signal      = classify_signal(title, description)
+        signal = classify_signal(title, description)
+        # Boost national-match distance for high-signal geopolitical events
+        # e.g. "US will strike Iran" affects every supplier in Iran at full weight
+        if proximity_label.startswith("National impact") and signal == "high":
+            dist_mult = min(dist_mult * 1.4, 1.0)
         sev_mult    = SEVERITY_MULTIPLIER.get(signal, 0.2)
 
         # ── Step 3: Recency / Forward-looking weight ──
@@ -940,6 +946,7 @@ def get_score_breakdown(
                 "points":         round(event_score, 2),
                 "counted":        False,
                 "is_forecast":    time_mult > 1.0,
+                "url":            str(event.get("url", "") or ""),
             })
 
     # Sort and mark which events actually count (top 5)
