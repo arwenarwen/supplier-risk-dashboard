@@ -67,10 +67,14 @@ DISRUPTION_KEYWORDS_L1 = {
     "earthquake", "tsunami", "typhoon", "hurricane", "cyclone", "tornado",
     "flood", "flooding", "landslide", "volcanic", "wildfire", "drought",
     "blizzard", "snowstorm", "monsoon", "heatwave",
-    # Human/political
+    # Human/political — expanded for conflict zones
     "war", "conflict", "military", "invasion", "coup", "sanctions",
     "embargo", "blockade", "tariff", "export ban", "import ban",
     "trade restriction", "trade war", "protest", "riot", "civil unrest",
+    "airstrike", "airstrikes", "missile strike", "missile attack",
+    "bombing", "shelling", "attack", "damaged", "destroyed", "reduced",
+    "hit by", "targeted", "under attack", "affected by conflict",
+    "wartime", "military operation", "armed conflict",
     # Shortages
     "shortage", "scarcity", "rationing", "depletion",
 }
@@ -92,6 +96,10 @@ SUPPLY_CONTEXT_KEYWORDS_L1 = {
     "textile", "garment", "pharmaceutical", "chemical", "oil", "gas",
     "fuel", "energy supply", "power grid", "pipeline", "refinery",
     "agriculture", "grain", "wheat", "commodity",
+    # Conflict-zone supply chain terms
+    "iron ore", "sunflower oil", "fertilizer", "ammonia", "black sea",
+    "export capacity", "cargo vessel", "inland rail", "freight cost",
+    "trade corridor", "supply route", "evacuation corridor",
 }
 
 
