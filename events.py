@@ -24,10 +24,7 @@ import re
 import time
 import requests
 try:
-    try:
     import pycountry
-except ImportError:
-    pycountry = None
 except ImportError:
     pycountry = None
 import xml.etree.ElementTree as ET
