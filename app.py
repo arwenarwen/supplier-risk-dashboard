@@ -6,6 +6,7 @@ Run with: streamlit run app.py
 import os
 import pandas as pd
 import streamlit as st
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables from .env file (local dev)
