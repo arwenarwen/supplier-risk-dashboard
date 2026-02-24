@@ -147,9 +147,19 @@ with st.sidebar:
             st.warning("Upload suppliers first.")
         else:
             countries = suppliers_df["country"].dropna().unique().tolist()
-            with st.spinner(f"Scanning 60+ sources across {len(countries)} countries..."):
-                rss, gdelt, newsapi, weather = refresh_all_events(news_api_key, weather_api_key, countries)
-            st.success(f"📡 {rss} RSS · {gdelt} GDELT · {newsapi} NewsAPI · {weather} ⛅")
+            llm_note = "🤖 + LLM filter" if openai_api_key else "keyword filter only"
+            with st.spinner(f"Scanning 60+ sources · {llm_note}..."):
+                rss, gdelt, newsapi, weather, fstats = refresh_all_events(
+                    news_api_key, weather_api_key, countries, openai_api_key
+                )
+            approved = fstats.get("approved", 0)
+            total    = fstats.get("total", 0)
+            rej_l1   = fstats.get("rejected_l1", 0)
+            rej_l2   = fstats.get("rejected_l2", 0)
+            rej_l3   = fstats.get("rejected_l3", 0)
+            llm_calls = fstats.get("llm_calls", 0)
+            st.success(f"✅ {approved} events stored from {total} articles scanned")
+            st.caption(f"Filtered out: {rej_l1} (no keywords) · {rej_l2} (blocklist) · {rej_l3} (LLM) · {llm_calls} LLM calls used")
             st.session_state["last_refresh"] = datetime.utcnow()
             st.rerun()
 
@@ -161,7 +171,9 @@ with st.sidebar:
             suppliers_df = get_all_suppliers()
             if not suppliers_df.empty:
                 countries = suppliers_df["country"].dropna().unique().tolist()
-                rss, gdelt, newsapi, weather = refresh_all_events(news_api_key, weather_api_key, countries)
+                rss, gdelt, newsapi, weather, fstats = refresh_all_events(
+                    news_api_key, weather_api_key, countries, openai_api_key
+                )
                 run_scoring_engine()
                 st.session_state["last_refresh"] = datetime.utcnow()
                 st.rerun()
@@ -299,13 +311,32 @@ if not suppliers_df.empty:
                 st.session_state["drill_supplier"] = name
 
     with col_events:
-        st.markdown('<p class="section-header">📰 Recent Events</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-header">📰 Recent Supply Chain Events</p>', unsafe_allow_html=True)
         if events_df.empty:
             st.info("No events yet. Click 'Fetch Events Now' in the sidebar.")
         else:
-            display_events = events_df[["title", "detected_country", "event_type", "published_date"]].head(10)
-            display_events.columns = ["Title", "Country", "Type", "Published"]
-            st.dataframe(display_events, use_container_width=True, hide_index=True)
+            EVENT_ICONS = {"weather": "⛅", "news": "📰"}
+            SEV_COLORS  = {"high": "#ef4444", "medium": "#f59e0b", "low": "#94a3b8"}
+
+            for _, ev in events_df.head(8).iterrows():
+                icon     = EVENT_ICONS.get(str(ev.get("event_type","")), "📰")
+                country  = str(ev.get("detected_country", "Global"))
+                title    = str(ev.get("title", ""))[:85]
+                source   = str(ev.get("source", ""))[:25]
+                pub      = str(ev.get("published_date", ""))[:10]
+                severity = str(ev.get("severity", "medium")).lower()
+                sev_col  = SEV_COLORS.get(severity, "#94a3b8")
+
+                st.markdown(f"""
+                <div style="background:#0f172a;border:1px solid #1e293b;border-left:3px solid {sev_col};
+                            border-radius:6px;padding:8px 12px;margin-bottom:5px;">
+                    <div style="color:#f1f5f9;font-size:0.85rem;font-weight:600">{icon} {title}</div>
+                    <div style="color:#64748b;font-size:0.75rem;margin-top:2px">
+                        🌍 {country} &nbsp;·&nbsp; 📡 {source} &nbsp;·&nbsp; 🗓 {pub}
+                        &nbsp;·&nbsp; <span style="color:{sev_col}">● {severity.upper()}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
     st.markdown("---")
 
