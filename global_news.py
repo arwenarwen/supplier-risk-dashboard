@@ -92,69 +92,77 @@ def _get_country_code(country_name: str) -> tuple[str, str]:
 
 # ─── Source 1: GDELT — upgraded query targeting ──────────────────────────────
 
+def _fetch_single_gdelt_query(query: str, default_country: str) -> list[dict]:
+    """Fetch a single GDELT query. Designed for parallel execution."""
+    try:
+        url = (
+            "https://api.gdeltproject.org/api/v2/doc/doc"
+            f"?query={requests.utils.quote(query)}"
+            "&mode=artlist&maxrecords=15&sort=DateDesc"
+            "&format=json&timespan=480"  # Last 8 hours only — keeps it fast + relevant
+        )
+        r = requests.get(url, headers={"User-Agent": "SupplierRiskDashboard/2.0"}, timeout=8)
+        if r.status_code != 200:
+            return []
+
+        results = []
+        for art in r.json().get("articles", []):
+            title        = art.get("title", "")
+            source       = art.get("domain", "GDELT")
+            published    = art.get("seendate", datetime.utcnow().isoformat())
+            country_code = art.get("sourcecountry", "")
+            try:
+                c    = pycountry.countries.get(alpha_2=country_code.upper()) if country_code else None
+                ctry = c.name if c else default_country
+            except Exception:
+                ctry = default_country
+            if title:
+                results.append({
+                    "title":          title[:500],
+                    "description":    f"Via {source}",
+                    "source":         f"GDELT/{source}",
+                    "published_date": published,
+                    "country":        ctry,
+                    "event_type":     "news",
+                })
+        return results
+    except Exception:
+        return []
+
+
 def fetch_gdelt_for_suppliers(suppliers: list[dict]) -> list[dict]:
     """
-    Run targeted GDELT queries for each unique country in the supplier list.
-    GDELT covers 150+ countries and 65 languages — no country is excluded.
+    Run GDELT queries in PARALLEL for all unique supplier countries.
+    One query per country (not per supplier) to keep it fast.
+    Uses 8-worker thread pool with 8s timeout per query — max ~15s total.
     """
-    articles = []
     seen_countries = set()
+    queries = []  # list of (query_string, country)
 
     for s in suppliers:
         country = str(s.get("country", "") or "").strip()
-        city    = str(s.get("city", "") or "").strip()
         if not country or country in seen_countries:
             continue
         seen_countries.add(country)
+        # One focused query per country
+        queries.append((
+            f"{country} supply chain OR port OR shipping OR factory "
+            f"conflict OR strike OR flood OR sanction OR disruption",
+            country
+        ))
 
-        # City-specific query first (most precise)
-        queries = []
-        if city:
-            queries.append(
-                f"{city} port OR shipping OR factory OR supply chain "
-                f"OR strike OR flood OR earthquake OR war OR sanction"
-            )
-        # Country-level query
-        queries.append(
-            f"{country} port OR export OR shipping OR factory OR supply chain "
-            f"OR strike OR disruption OR conflict OR sanction OR flood"
-        )
+    if not queries:
+        return []
 
-        for q in queries:
+    articles = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {
+            executor.submit(_fetch_single_gdelt_query, q, c): c
+            for q, c in queries
+        }
+        for future in as_completed(futures, timeout=20):
             try:
-                url = (
-                    "https://api.gdeltproject.org/api/v2/doc/doc"
-                    f"?query={requests.utils.quote(q)}"
-                    "&mode=artlist&maxrecords=25&sort=DateDesc"
-                    "&format=json&timespan=1440"
-                )
-                r = requests.get(url, headers={"User-Agent": "SupplierRiskDashboard/2.0"}, timeout=15)
-                if r.status_code != 200:
-                    continue
-
-                for art in r.json().get("articles", []):
-                    title        = art.get("title", "")
-                    source       = art.get("domain", "GDELT")
-                    published    = art.get("seendate", datetime.utcnow().isoformat())
-                    country_code = art.get("sourcecountry", "")
-
-                    try:
-                        c    = pycountry.countries.get(alpha_2=country_code.upper()) if country_code else None
-                        ctry = c.name if c else country
-                    except Exception:
-                        ctry = country
-
-                    articles.append({
-                        "title":         title[:500],
-                        "description":   f"Via {source}",
-                        "source":        f"GDELT/{source}",
-                        "published_date": published,
-                        "country":       ctry,
-                        "event_type":    "news",
-                    })
-
-                time.sleep(0.3)  # be polite to GDELT
-
+                articles.extend(future.result())
             except Exception:
                 continue
 
@@ -185,9 +193,7 @@ def build_dynamic_supplier_feeds(suppliers: list[dict]) -> list[tuple]:
     seen = set()
 
     QUERY_SUFFIXES = [
-        "port disruption conflict strike flood war sanction",
-        "supply chain factory shipping export disruption",
-        "trade ban sanction embargo conflict military",
+        "port disruption conflict strike flood war sanction supply chain",
     ]
 
     for s in suppliers:
@@ -290,7 +296,7 @@ def _parse_rss(source_name: str, url: str, default_country: str) -> list[dict]:
             "User-Agent": "SupplierRiskDashboard/2.0",
             "Accept": "application/rss+xml, application/xml, text/xml",
         }
-        r = requests.get(url, headers=headers, timeout=12)
+        r = requests.get(url, headers=headers, timeout=4)
         if r.status_code != 200:
             return []
 
@@ -299,7 +305,7 @@ def _parse_rss(source_name: str, url: str, default_country: str) -> list[dict]:
                  root.findall(".//{http://www.w3.org/2005/Atom}entry"))
 
         articles = []
-        for item in items[:20]:
+        for item in items[:10]:
             title_el  = item.find("title") or item.find("{http://www.w3.org/2005/Atom}title")
             title     = title_el.text.strip() if title_el is not None and title_el.text else ""
 
@@ -339,12 +345,12 @@ def fetch_all_global_parallel(supplier_feeds: list[tuple] = None) -> list[dict]:
     all_feeds = WIRE_FEEDS + (supplier_feeds or [])
     articles  = []
 
-    with ThreadPoolExecutor(max_workers=30) as executor:
+    with ThreadPoolExecutor(max_workers=40) as executor:
         futures = {
             executor.submit(_parse_rss, name, url, country): (name, country)
             for name, url, country in all_feeds
         }
-        for future in as_completed(futures, timeout=40):
+        for future in as_completed(futures, timeout=25):
             try:
                 articles.extend(future.result())
             except Exception:
