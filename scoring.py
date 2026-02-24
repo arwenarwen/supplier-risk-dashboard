@@ -484,6 +484,95 @@ def run_scoring_engine() -> pd.DataFrame:
     return get_all_suppliers()
 
 
+
+def get_score_breakdown(
+    supplier_country: str,
+    supplier_lat,
+    supplier_lon,
+    supplier_city: str,
+    events_df
+) -> list[dict]:
+    """
+    Return a full per-event breakdown for the drill-down panel.
+    Each item has: title, source, published, signal, proximity_label,
+                   miles, dist_mult, sev_mult, time_mult, event_score, event_country
+    Returns ALL scored events (not just top 5) sorted by score desc.
+    """
+    if events_df.empty:
+        return []
+
+    supplier_continent = get_continent(supplier_country)
+    supplier_city_coords = CITY_COORDS.get(str(supplier_city).lower())
+
+    if supplier_lat is not None and supplier_lon is not None:
+        sup_lat, sup_lon = supplier_lat, supplier_lon
+    elif supplier_city_coords:
+        sup_lat, sup_lon = supplier_city_coords
+    else:
+        sup_lat, sup_lon = None, None
+
+    breakdown = []
+
+    for _, event in events_df.iterrows():
+        title         = str(event.get("title", ""))
+        description   = str(event.get("description", ""))
+        published     = str(event.get("published_date", ""))
+        source        = str(event.get("source", ""))
+        event_country = str(event.get("detected_country", "Unknown")).strip()
+        full_text     = f"{title} {description}"
+
+        event_coords = extract_city_coords(full_text)
+        miles = None
+
+        if event_coords and sup_lat is not None:
+            miles = round(haversine_miles(sup_lat, sup_lon, event_coords[0], event_coords[1]))
+            dist_mult = distance_multiplier(miles)
+            proximity_label = f"{miles:,} miles away"
+        elif event_country.lower() == supplier_country.lower():
+            dist_mult = 0.15
+            proximity_label = f"Same country — city unknown"
+        elif event_country not in ("Unknown", "Global", ""):
+            ec = get_continent(event_country)
+            if ec and ec == supplier_continent:
+                dist_mult = 0.05
+                proximity_label = f"Same continent ({event_country})"
+            else:
+                dist_mult = 0.02
+                proximity_label = f"Different continent ({event_country})"
+        else:
+            dist_mult = 0.01
+            proximity_label = "Unknown location"
+
+        signal   = classify_signal(title, description)
+        sev_mult = SEVERITY_MULTIPLIER.get(signal, 0.2)
+        time_mult = recency_weight(published)
+
+        event_score = min(25.0 * dist_mult * sev_mult * time_mult, MAX_POINTS_PER_EVENT)
+
+        if event_score > 0.1:
+            breakdown.append({
+                "title":          title,
+                "source":         source,
+                "published":      published[:16].replace("T", " "),
+                "event_country":  event_country,
+                "signal":         signal,
+                "proximity":      proximity_label,
+                "miles":          miles,
+                "dist_mult":      round(dist_mult, 3),
+                "sev_mult":       sev_mult,
+                "time_mult":      round(time_mult, 2),
+                "points":         round(event_score, 2),
+                "counted":        False,  # will be marked below
+            })
+
+    # Sort and mark which events actually count (top 5)
+    breakdown.sort(key=lambda x: x["points"], reverse=True)
+    for i, ev in enumerate(breakdown):
+        ev["counted"] = i < MAX_EVENTS_COUNTED
+        ev["rank"] = i + 1
+
+    return breakdown
+
 # ─── Optional: AI-Enhanced Scoring ───────────────────────────────────────────
 
 def ai_parse_event(event_text: str, openai_api_key: str) -> dict:
@@ -503,4 +592,3 @@ def ai_parse_event(event_text: str, openai_api_key: str) -> dict:
         return json.loads(r.choices[0].message.content.strip())
     except Exception:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
-
