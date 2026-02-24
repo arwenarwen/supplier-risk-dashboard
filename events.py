@@ -29,26 +29,107 @@ import streamlit as st
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import insert_event, clear_events
+from filtering import filter_articles_batch
 
 # ─── Disruption Keywords ──────────────────────────────────────────────────────
+# TWO-LAYER FILTER:
+# An article must contain at least one SUPPLY_CONTEXT word AND one DISRUPTION_TRIGGER.
+# This prevents false matches like medical/sports articles that contain
+# broad words like "shortage", "conflict", "disruption".
 
-DISRUPTION_KEYWORDS = [
-    "port", "port delay", "port closure", "port congestion", "shipping delay",
-    "cargo", "container", "freight", "logistics", "supply chain",
-    "customs delay", "dock strike", "longshoremen", "terminal closure",
-    "strike", "walkout", "labor dispute", "workers protest", "union strike",
-    "factory shutdown", "plant closure", "worker shortage",
-    "typhoon", "hurricane", "cyclone", "earthquake", "tsunami", "flood",
-    "landslide", "volcanic", "drought", "wildfire", "monsoon",
-    "sanctions", "trade war", "tariff", "export ban", "import ban",
-    "blockade", "embargo", "war", "conflict", "coup", "protest", "riot",
-    "shortage", "disruption", "blackout", "power outage", "energy crisis",
-    "semiconductor shortage", "raw material", "inflation spike",
-    "bridge collapse", "rail disruption", "road closure", "airport closure",
-    "canal blockage", "pipeline", "factory fire", "explosion",
+# Layer 1: Must mention a supply chain context
+SUPPLY_CONTEXT_KEYWORDS = [
+    # Logistics & shipping
+    "port", "shipping", "freight", "cargo", "container", "vessel", "ship",
+    "logistics", "supply chain", "warehouse", "customs", "import", "export",
+    "dock", "terminal", "harbor", "harbour", "tanker", "bulk carrier",
+    "rail freight", "air freight", "truck", "haulage", "last mile",
+    # Trade & manufacturing
+    "factory", "plant", "manufacturer", "production", "assembly",
+    "semiconductor", "raw material", "commodit", "oil", "gas", "steel",
+    "textile", "garment", "electronics", "automotive", "pharma",
+    "trade", "tariff", "sanction", "embargo", "export ban", "import ban",
+    "wto", "trade war", "trade route", "trade deal",
+    # Energy & infrastructure
+    "pipeline", "refinery", "power grid", "energy supply", "fuel supply",
+    "canal", "suez", "panama canal", "strait", "bosphorus",
+    # Economic
+    "inflation", "supply shortage", "demand shock", "economic crisis",
+    "currency crisis", "gdp", "recession",
 ]
 
-KEYWORD_SET = set(k.lower() for k in DISRUPTION_KEYWORDS)
+# Layer 2: Must also mention an active disruption event
+DISRUPTION_TRIGGER_KEYWORDS = [
+    # Natural disasters
+    "earthquake", "tsunami", "typhoon", "hurricane", "cyclone", "tornado",
+    "flood", "flooding", "landslide", "volcanic eruption", "wildfire",
+    "drought", "monsoon", "storm", "blizzard", "snowstorm", "heatwave",
+    # Human disruptions
+    "strike", "walkout", "labor dispute", "industrial action", "lockout",
+    "protest", "riot", "coup", "civil unrest", "war", "conflict",
+    "military", "missile", "attack", "explosion", "fire", "accident",
+    "blockade", "closure", "shutdown", "disruption", "delay", "congestion",
+    "shortage", "outage", "blackout", "rationing",
+    # Trade/political
+    "sanctions", "banned", "suspended", "halted", "seized", "impounded",
+    "tariff hike", "trade restriction", "export control",
+    # Infrastructure failures
+    "collapsed", "grounded", "stranded", "detained", "diverted",
+    "cancelled", "suspended service", "road closed", "bridge closed",
+]
+
+# Blocklist: articles containing ANY of these are rejected even if keywords match.
+# These are topics that commonly false-match supply chain keywords.
+NOISE_BLOCKLIST = [
+    # Medical / health (contain words like "shortage", "supply", "disruption")
+    "tourette", "syndrome", "autism", "adhd", "alzheimer", "cancer treatment",
+    "drug shortage", "blood supply", "hospital supply", "medical shortage",
+    "vaccine shortage", "insulin shortage", "medication shortage",
+    "mental health", "psychiatric", "therapy session", "clinical trial",
+    "patient shortage", "nurse shortage", "doctor shortage",
+    # Entertainment / sports (contain "strike", "war", "conflict")
+    "hollywood strike", "writers strike", "actors strike", "sag-aftra",
+    "nba", "nfl", "fifa", "premier league", "champions league",
+    "box office", "movie", "film festival", "celebrity", "bafta", "oscar",
+    "grammy", "emmy", "taylor swift", "beyonce",
+    # Politics unrelated to trade
+    "election fraud", "abortion", "gun control", "immigration policy",
+    "supreme court", "criminal trial", "lawsuit",
+    # Cybersecurity (contains "attack", "disruption" but not supply chain)
+    "ransomware", "cyber attack", "data breach", "hack", "phishing",
+    # Generic finance (contains "shortage", "crisis" but not supply chain)  
+    "housing shortage", "housing crisis", "rent", "mortgage",
+    "stock market crash", "crypto", "bitcoin", "nft",
+]
+
+SUPPLY_CONTEXT_SET  = set(SUPPLY_CONTEXT_KEYWORDS)
+DISRUPTION_SET      = set(DISRUPTION_TRIGGER_KEYWORDS)
+BLOCKLIST_SET       = set(NOISE_BLOCKLIST)
+
+
+def is_relevant(title: str, description: str = "") -> bool:
+    """
+    Two-layer relevance filter:
+    1. Must NOT contain any blocklist terms
+    2. Must contain at least one supply chain context word
+    3. Must contain at least one disruption trigger word
+    All three conditions required to pass.
+    """
+    text = f"{title} {description}".lower()
+
+    # Reject if blocklisted topic
+    if any(noise in text for noise in BLOCKLIST_SET):
+        return False
+
+    # Must have supply context AND disruption trigger
+    has_context   = any(kw in text for kw in SUPPLY_CONTEXT_SET)
+    has_disruption = any(kw in text for kw in DISRUPTION_SET)
+
+    return has_context and has_disruption
+
+
+# Legacy alias used elsewhere
+KEYWORD_SET = SUPPLY_CONTEXT_SET | DISRUPTION_SET
 
 
 # ─── Country Detection ────────────────────────────────────────────────────────
@@ -134,8 +215,10 @@ def is_relevant(title: str, description: str = "") -> bool:
     return any(kw in text for kw in KEYWORD_SET)
 
 
-def safe_insert(title, description, source, published_date, country, event_type, severity="medium"):
-    if not title or not is_relevant(title, description):
+def safe_insert(title, description, source, published_date, country, event_type,
+                severity="medium", disruption_type="other", confidence=60, reasoning=""):
+    """Insert a pre-filtered event — caller is responsible for filtering."""
+    if not title:
         return
     insert_event(
         title=str(title)[:500],
@@ -487,23 +570,30 @@ def deduplicate(articles: list[dict]) -> list[dict]:
 def refresh_all_events(
     news_api_key: str,
     weather_api_key: str,
-    supplier_countries: list[str]
-) -> tuple[int, int, int, int]:
+    supplier_countries: list[str],
+    openai_api_key: str = ""
+) -> tuple[int, int, int, int, dict]:
     """
-    Pull from ALL sources simultaneously.
-    Returns (rss_count, gdelt_count, newsapi_count, weather_count).
+    Pull from ALL sources, run three-layer filter, store only validated events.
+    Returns (rss_count, gdelt_count, newsapi_count, weather_count, filter_stats).
     """
     clear_events()
 
+    # ── Gather raw articles from all sources ──────────────────────────────────
     all_news = []
-    all_news.extend(fetch_all_rss_parallel())   # 60+ RSS feeds in parallel
-    all_news.extend(fetch_gdelt_events())        # GDELT 150+ countries
-    all_news.extend(fetch_newsapi_events(news_api_key))  # NewsAPI
+    all_news.extend(fetch_all_rss_parallel())
+    all_news.extend(fetch_gdelt_events())
+    all_news.extend(fetch_newsapi_events(news_api_key))
 
     unique = deduplicate(all_news)
 
+    # ── Run three-layer filter on all news articles ───────────────────────────
+    use_llm = bool(openai_api_key)
+    approved, stats = filter_articles_batch(unique, openai_api_key, use_llm)
+
+    # ── Store approved articles ───────────────────────────────────────────────
     rss_count = gdelt_count = newsapi_count = 0
-    for art in unique:
+    for art in approved:
         safe_insert(
             title=art["title"],
             description=art.get("description", ""),
@@ -512,15 +602,16 @@ def refresh_all_events(
             country=art.get("country", "Unknown"),
             event_type=art.get("event_type", "news"),
             severity=art.get("severity", "medium"),
+            disruption_type=art.get("disruption_type", "other"),
+            confidence=art.get("confidence", 60),
+            reasoning=art.get("reasoning", ""),
         )
-        if "GDELT" in art["source"]:
-            gdelt_count += 1
-        elif art["source"] in {n for n, _, _ in GLOBAL_RSS_FEEDS + GOOGLE_NEWS_FEEDS}:
-            rss_count += 1
-        else:
-            newsapi_count += 1
+        src = art["source"]
+        if "GDELT" in src:           gdelt_count += 1
+        elif src in {n for n, _, _ in GLOBAL_RSS_FEEDS + GOOGLE_NEWS_FEEDS}: rss_count += 1
+        else:                        newsapi_count += 1
 
-    # Weather alerts
+    # ── Weather alerts bypass news filter (they are always relevant) ──────────
     weather_events = fetch_weather_alerts(weather_api_key, supplier_countries)
     for evt in weather_events:
         insert_event(
@@ -530,7 +621,7 @@ def refresh_all_events(
             severity="high", disruption_likely="Yes"
         )
 
-    return rss_count, gdelt_count, newsapi_count, len(weather_events)
+    return rss_count, gdelt_count, newsapi_count, len(weather_events), stats
 
 
 def should_auto_refresh(last_refresh_time: datetime | None, interval_minutes: int = 10) -> bool:
