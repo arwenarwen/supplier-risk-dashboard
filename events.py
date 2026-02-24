@@ -223,7 +223,7 @@ def is_relevant(title: str, description: str = "") -> bool:
 
 
 def safe_insert(title, description, source, published_date, country, event_type,
-                severity="medium", disruption_type="other", confidence=60, reasoning=""):
+                severity="medium", disruption_type="other", confidence=60, reasoning="", url=""):
     """Insert a pre-filtered event — caller is responsible for filtering."""
     if not title:
         return
@@ -235,7 +235,8 @@ def safe_insert(title, description, source, published_date, country, event_type,
         country=country,
         event_type=event_type,
         severity=severity,
-        disruption_likely="Yes"
+        disruption_likely="Yes",
+        url=url or ""
     )
 
 
@@ -681,6 +682,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Iran",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=US+strike+Iran+military+decision+2026",
         },
         {
             "title": "Red Sea shipping disruption continues as Houthi attacks force vessels to reroute via Cape of Good Hope",
@@ -690,6 +692,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Yemen",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Red+Sea+Houthi+shipping+disruption+reroute",
         },
         {
             "title": "Black Sea grain and iron ore exports fall 30% as Russian strikes target Ukrainian port infrastructure",
@@ -699,6 +702,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Ukraine",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Ukraine+Black+Sea+port+Russia+strike+grain+export",
         },
         {
             "title": "Taiwan Strait military exercises disrupt shipping lanes; vessels rerouting around southern Taiwan",
@@ -708,6 +712,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Taiwan",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Taiwan+Strait+military+exercises+shipping+disruption",
         },
         {
             "title": "Bangladesh garment factory workers strike over wage dispute; 200 factories suspended production",
@@ -717,6 +722,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Bangladesh",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Bangladesh+garment+factory+strike+workers",
         },
         {
             "title": "Typhoon warning issued for Philippines: Category 4 storm forecast to make landfall within 72 hours",
@@ -726,6 +732,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Philippines",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Philippines+typhoon+warning+factory+port",
         },
         {
             "title": "US West Coast port workers announce strike vote; ILWU contract negotiations collapse",
@@ -735,6 +742,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "United States",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=ILWU+port+strike+West+Coast+longshoremen",
         },
         {
             "title": "China imposes new export controls on rare earth materials; semiconductor supply chain at risk",
@@ -744,6 +752,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "China",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=China+export+controls+rare+earth+semiconductor",
         },
         {
             "title": "Rotterdam port strike planned for next week; European freight forwarding operations at risk",
@@ -753,6 +762,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Netherlands",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=Rotterdam+port+strike+freight+Europe",
         },
         {
             "title": "Severe flooding in Vietnam's manufacturing corridor disrupts factory operations and freight",
@@ -762,6 +772,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Vietnam",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=Vietnam+flooding+factory+manufacturing+disruption",
         },
         {
             "title": "New US tariffs on Chinese goods take effect next month; procurement teams accelerating orders",
@@ -771,6 +782,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "China",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=US+tariffs+China+trade+war+supply+chain",
         },
         {
             "title": "Suez Canal transit fees doubled; shipping lines pass cost to cargo owners",
@@ -780,6 +792,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Egypt",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=Suez+Canal+transit+fees+shipping+reroute",
         },
     ]
 
@@ -795,6 +808,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "India",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=India+pharmaceutical+API+shortage+monsoon",
         },
         {
             "title": "Turkey earthquake damages Iskenderun port and industrial facilities in southeastern region",
@@ -804,6 +818,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Turkey",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Turkey+earthquake+Iskenderun+port+industrial",
         },
         {
             "title": "Pakistan port congestion at Karachi worsens; import cargo facing 3-week delay",
@@ -813,6 +828,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Pakistan",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=Pakistan+Karachi+port+congestion+delay",
         },
         {
             "title": "Nigeria port strike disrupts oil and commodity exports from Apapa and Tin Can terminals",
@@ -822,6 +838,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "Nigeria",
             "event_type": "news",
             "severity": "high",
+            "url": "https://news.google.com/search?q=Nigeria+Apapa+port+strike+oil+export",
         },
         {
             "title": "South Korea semiconductor export controls tightened amid US-China technology restrictions",
@@ -831,6 +848,7 @@ def _get_seed_articles(suppliers: list[dict]) -> list[dict]:
             "country": "South Korea",
             "event_type": "news",
             "severity": "medium",
+            "url": "https://news.google.com/search?q=South+Korea+semiconductor+export+controls+China",
         },
     ]
 
@@ -872,6 +890,7 @@ def refresh_all_events(
             country=art.get("country", "Unknown"),
             event_type=art.get("event_type", "news"),
             severity=art.get("severity", "high"),
+            url=art.get("url", ""),
         )
         rss_count += 1
 
@@ -940,6 +959,7 @@ def refresh_all_events(
                     country=art.get("country", "Unknown"),
                     event_type=art.get("event_type", "news"),
                     severity=art.get("severity", "medium"),
+                    url=art.get("url", ""),
                 )
                 src = art.get("source", "")
                 if "GDELT" in src:  gdelt_count += 1
