@@ -562,6 +562,20 @@ SEASONAL_RISK_CALENDAR = [
      "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [1,2,3,4,5,6],
      "signal": "high", "type": "⚓ Red Sea / Bab-el-Mandeb — Houthi attack risk",
      "weight": 0.75, "horizon_days": 30},
+    # ── Iran / Strait of Hormuz ────────────────────────────────────────────────
+    # 21% of global oil and LNG passes through Hormuz — any Iran escalation
+    # creates immediate risk for ALL energy-linked supply chains globally.
+    {"countries": ["Iran","Iraq","UAE","Kuwait","Bahrain","Qatar","Oman"],
+     "cities": ["tehran","bandar abbas","dubai","abu dhabi","kuwait city",
+                "muscat","basra","bushehr"],
+     "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [1,2,3,4,5,6,7,8],
+     "signal": "high", "type": "⚓ Strait of Hormuz / Persian Gulf — military escalation & oil transit risk",
+     "weight": 0.80, "horizon_days": 30},
+    {"countries": ["Israel","Lebanon","Jordan","Syria","Palestine"],
+     "cities": ["tel aviv","haifa","ashdod","beirut","amman"],
+     "months": [1,2,3,4,5,6,7,8,9,10,11,12], "peak_months": [1,2,3,4,5,6,7,8,9,10,11,12],
+     "signal": "high", "type": "⚔️ Middle East conflict zone — ongoing regional escalation risk",
+     "weight": 0.70, "horizon_days": 30},
     # ── Wildfire / Drought ────────────────────────────────────────────────────
     {"countries": ["United States","Canada","Australia"],
      "months": [6,7,8,9,10], "peak_months": [8,9],
