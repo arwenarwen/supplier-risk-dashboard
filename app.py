@@ -17,7 +17,7 @@ from database import init_db, get_all_suppliers, get_all_events
 from upload import process_upload, get_sample_csv
 from geocoding import geocode_suppliers
 from events import refresh_all_events, should_auto_refresh
-from scoring import run_scoring_engine
+from scoring import run_scoring_engine, get_score_breakdown
 from mapping import build_supplier_map
 from alerts import dispatch_alerts
 
@@ -281,38 +281,27 @@ if not suppliers_df.empty:
 
     st.markdown("---")
 
-    # ── 4. Top 5 High Risk Suppliers ─────────────────────────────────────────
+    # ── 4. Top 5 + Events ────────────────────────────────────────────────────
 
     col_top, col_events = st.columns([1, 1])
 
     with col_top:
         st.markdown('<p class="section-header">🚨 Top 5 Highest Risk Suppliers</p>', unsafe_allow_html=True)
         top5 = suppliers_df.head(5)
-
         for _, row in top5.iterrows():
             level = str(row.get("risk_level", "Low")).lower()
             score = row.get("risk_score", 0)
             name = row.get("supplier_name", "Unknown")
             country = row.get("country", "")
-            summary = str(row.get("event_summary", ""))[:100]
-
-            badge_class = f"risk-{level}"
             card_class = level if level in ("high", "medium", "low") else "low"
-
-            st.markdown(f"""
-            <div class="supplier-card {card_class}">
-                <strong>{name}</strong>
-                <span class="{badge_class}" style="float:right">{score:.0f}/100</span><br>
-                <small style="color:#94a3b8">{country} · {row.get('tier','')}</small><br>
-                <small style="color:#64748b">{summary}</small>
-            </div>
-            """, unsafe_allow_html=True)
+            badge_class = f"risk-{level}"
+            if st.button(f"{name}  —  {score:.0f}/100  ({country})", key=f"top5_{name}", use_container_width=True):
+                st.session_state["drill_supplier"] = name
 
     with col_events:
         st.markdown('<p class="section-header">📰 Recent Events</p>', unsafe_allow_html=True)
-
         if events_df.empty:
-            st.info("No events yet. Click 'Fetch Latest Events' in the sidebar.")
+            st.info("No events yet. Click 'Fetch Events Now' in the sidebar.")
         else:
             display_events = events_df[["title", "detected_country", "event_type", "published_date"]].head(10)
             display_events.columns = ["Title", "Country", "Type", "Published"]
@@ -322,17 +311,12 @@ if not suppliers_df.empty:
 
     # ── 5. Full Supplier Table ────────────────────────────────────────────────
 
-    st.markdown('<p class="section-header">📋 All Suppliers</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">📋 All Suppliers — click a row to see score breakdown</p>', unsafe_allow_html=True)
 
     # Filters
     fcol1, fcol2, fcol3 = st.columns(3)
-
     with fcol1:
-        filter_risk = st.multiselect(
-            "Filter by Risk Level",
-            options=["High", "Medium", "Low"],
-            default=["High", "Medium", "Low"]
-        )
+        filter_risk = st.multiselect("Filter by Risk Level", options=["High", "Medium", "Low"], default=["High", "Medium", "Low"])
     with fcol2:
         categories = suppliers_df["category"].dropna().unique().tolist()
         filter_cat = st.multiselect("Filter by Category", options=categories, default=categories)
@@ -340,35 +324,113 @@ if not suppliers_df.empty:
         tiers = suppliers_df["tier"].dropna().unique().tolist()
         filter_tier = st.multiselect("Filter by Tier", options=tiers, default=tiers)
 
-    # Apply filters
     filtered = suppliers_df[
         suppliers_df["risk_level"].isin(filter_risk) &
         suppliers_df["category"].isin(filter_cat) &
         suppliers_df["tier"].isin(filter_tier)
-    ]
+    ].sort_values("risk_score", ascending=False)
 
-    # Display columns
-    display_cols = ["supplier_name", "category", "city", "country", "tier", "risk_score", "risk_level", "event_summary"]
-    available = [c for c in display_cols if c in filtered.columns]
-    display_df = filtered[available].copy()
-    display_df.columns = ["Supplier", "Category", "City", "Country", "Tier",
-                           "Risk Score", "Risk Level", "Event Summary"][:len(available)]
+    # Clickable supplier rows
+    RISK_ICON = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
 
-    # Color the Risk Score column
-    st.dataframe(
-        display_df.sort_values("Risk Score", ascending=False),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Risk Score": st.column_config.ProgressColumn(
-                "Risk Score",
-                min_value=0,
-                max_value=100,
-                format="%.0f",
-            ),
-            "Risk Level": st.column_config.TextColumn("Risk Level"),
-        }
-    )
+    for _, row in filtered.iterrows():
+        name     = str(row.get("supplier_name", ""))
+        city     = str(row.get("city", ""))
+        country  = str(row.get("country", ""))
+        tier     = str(row.get("tier", ""))
+        category = str(row.get("category", ""))
+        score    = row.get("risk_score", 0)
+        level    = str(row.get("risk_level", "Low"))
+        icon     = RISK_ICON.get(level, "⚪")
+
+        label = f"{icon}  {name}   |   {city}, {country}   |   {category} · Tier {tier}   |   **{score:.0f} / 100**"
+        if st.button(label, key=f"row_{name}", use_container_width=True):
+            # Toggle: clicking same supplier again closes the panel
+            if st.session_state.get("drill_supplier") == name:
+                st.session_state.pop("drill_supplier", None)
+            else:
+                st.session_state["drill_supplier"] = name
+
+        # ── Drill-down panel — renders inline below the clicked row ──────────
+        if st.session_state.get("drill_supplier") == name:
+            with st.container():
+                st.markdown(f"""
+                <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;
+                            padding:20px;margin:4px 0 12px 0;">
+                <h4 style="color:#f1f5f9;margin:0 0 4px 0">📊 Score Breakdown: {name}</h4>
+                <p style="color:#64748b;margin:0;font-size:0.85rem">
+                    {city}, {country} &nbsp;·&nbsp; {category} &nbsp;·&nbsp; Tier {tier}
+                </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Get full per-event breakdown
+                breakdown = get_score_breakdown(
+                    supplier_country = country,
+                    supplier_lat     = row.get("latitude"),
+                    supplier_lon     = row.get("longitude"),
+                    supplier_city    = city,
+                    events_df        = events_df
+                )
+
+                if not breakdown:
+                    st.info("No events matched this supplier.")
+                else:
+                    # Score summary bar
+                    sc1, sc2, sc3, sc4 = st.columns(4)
+                    sc1.metric("Risk Score", f"{score:.0f} / 100")
+                    sc2.metric("Risk Level", level)
+                    counted = [e for e in breakdown if e["counted"]]
+                    sc3.metric("Events Counted", f"{len(counted)} of {len(breakdown)}")
+                    sc4.metric("Top Event", f"{counted[0]['points']:.1f} pts" if counted else "—")
+
+                    st.markdown("##### 🔍 Events contributing to this score")
+                    st.caption("Only the top 5 highest-scoring events count toward the final score. Others are shown for context.")
+
+                    for ev in breakdown[:15]:  # Show top 15 for context
+                        counted_badge  = "✅ COUNTED" if ev["counted"] else "⬜ not counted"
+                        signal_colors  = {"high": "#ef4444", "medium": "#f59e0b", "low": "#94a3b8"}
+                        signal_color   = signal_colors.get(ev["signal"], "#94a3b8")
+
+                        # Build multiplier explanation
+                        dist_pct  = int(ev["dist_mult"] * 100)
+                        sev_pct   = int(ev["sev_mult"] * 100)
+                        time_pct  = int(ev["time_mult"] * 100)
+
+                        st.markdown(f"""
+                        <div style="background:#0f172a;border:1px solid #1e293b;border-left:3px solid {signal_color};
+                                    border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span style="color:#f1f5f9;font-weight:600;font-size:0.9rem">{ev['title'][:90]}</span>
+                                <span style="color:#f1f5f9;font-weight:700;font-size:1rem;min-width:60px;text-align:right">
+                                    +{ev['points']:.2f} pts
+                                </span>
+                            </div>
+                            <div style="color:#64748b;font-size:0.78rem;margin-top:4px">
+                                📍 <b style="color:#94a3b8">{ev['proximity']}</b>
+                                &nbsp;·&nbsp; 🗓 {ev['published']}
+                                &nbsp;·&nbsp; 📡 {ev['source'][:30]}
+                                &nbsp;·&nbsp; {counted_badge}
+                            </div>
+                            <div style="color:#64748b;font-size:0.75rem;margin-top:4px">
+                                <span style="color:{signal_color}">● {ev['signal'].upper()} signal</span>
+                                &nbsp;·&nbsp;
+                                📏 Distance: <b>{dist_pct}%</b> weight
+                                &nbsp;·&nbsp;
+                                ⚡ Severity: <b>{sev_pct}%</b> weight
+                                &nbsp;·&nbsp;
+                                🕐 Recency: <b>{time_pct}%</b> weight
+                                &nbsp;·&nbsp;
+                                Formula: 25 × {ev['dist_mult']} × {ev['sev_mult']} × {ev['time_mult']} = <b>{ev['points']:.2f}</b>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    if st.button("✕ Close breakdown", key=f"close_{name}"):
+                        st.session_state.pop("drill_supplier", None)
+                        st.rerun()
+
+                st.markdown("---")
 
 else:
     # Empty state
