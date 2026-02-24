@@ -529,11 +529,31 @@ if not suppliers_df.empty:
                         sev_pct   = int(ev["sev_mult"] * 100)
                         time_pct  = int(ev["time_mult"] * 100)
 
+                        is_fwd      = ev.get("is_forecast", False)
+                        is_seasonal = ev.get("_is_seasonal", False)
+                        if is_seasonal:
+                            fwd_badge    = '<span style="background:#0f766e;color:white;font-size:0.7rem;padding:1px 6px;border-radius:4px;margin-left:6px">📅 SEASONAL</span>'
+                            time_label   = "Seasonal window — forward signal"
+                            time_icon    = "📅"
+                            border_color = "#0f766e"
+                        elif is_fwd:
+                            fwd_badge    = '<span style="background:#7c3aed;color:white;font-size:0.7rem;padding:1px 6px;border-radius:4px;margin-left:6px">🔮 FORECAST</span>'
+                            time_label   = "Future signal — act now"
+                            time_icon    = "🔮"
+                            border_color = "#7c3aed"
+                        else:
+                            fwd_badge    = ""
+                            time_label   = f"{time_pct}% recency weight"
+                            time_icon    = "🕐"
+                            border_color = signal_color
+
                         st.markdown(f"""
-                        <div style="background:#0f172a;border:1px solid #1e293b;border-left:3px solid {signal_color};
+                        <div style="background:#0f172a;border:1px solid #1e293b;border-left:3px solid {border_color};
                                     border-radius:6px;padding:10px 14px;margin-bottom:6px;">
                             <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <span style="color:#f1f5f9;font-weight:600;font-size:0.9rem">{ev['title'][:90]}</span>
+                                <span style="color:#f1f5f9;font-weight:600;font-size:0.9rem">
+                                    {ev['title'][:90]}{fwd_badge}
+                                </span>
                                 <span style="color:#f1f5f9;font-weight:700;font-size:1rem;min-width:60px;text-align:right">
                                     +{ev['points']:.2f} pts
                                 </span>
@@ -551,7 +571,7 @@ if not suppliers_df.empty:
                                 &nbsp;·&nbsp;
                                 ⚡ Severity: <b>{sev_pct}%</b> weight
                                 &nbsp;·&nbsp;
-                                🕐 Recency: <b>{time_pct}%</b> weight
+                                {time_icon} <b>{time_label}</b>
                                 &nbsp;·&nbsp;
                                 Formula: 25 × {ev['dist_mult']} × {ev['sev_mult']} × {ev['time_mult']} = <b>{ev['points']:.2f}</b>
                             </div>
