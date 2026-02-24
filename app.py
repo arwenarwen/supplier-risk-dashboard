@@ -15,7 +15,7 @@ load_dotenv()
 from database import init_db, get_all_suppliers, get_all_events
 from upload import process_upload, get_sample_csv
 from geocoding import geocode_suppliers
-from events import refresh_all_events
+from events import refresh_all_events, should_auto_refresh
 from scoring import run_scoring_engine
 from mapping import build_supplier_map
 from alerts import dispatch_alerts
@@ -125,17 +125,47 @@ with st.sidebar:
     st.markdown("---")
     st.markdown('<p class="section-header">Data Controls</p>', unsafe_allow_html=True)
 
-    # Fetch Events button
-    if st.button("🔄 Fetch Latest Events", use_container_width=True):
+    # Auto-refresh toggle
+    auto_refresh = st.toggle("⚡ Auto-refresh", value=False)
+    refresh_interval = st.select_slider(
+        "Refresh every",
+        options=[5, 10, 15, 30, 60],
+        value=10,
+        format_func=lambda x: f"{x} min"
+    )
+
+    # Show last refresh time
+    if "last_refresh" in st.session_state:
+        elapsed = int((datetime.utcnow() - st.session_state["last_refresh"]).total_seconds() / 60)
+        st.caption(f"🕐 Last refreshed {elapsed} min ago")
+
+    # Manual fetch button
+    if st.button("🔄 Fetch Events Now", use_container_width=True):
         suppliers_df = get_all_suppliers()
         if suppliers_df.empty:
             st.warning("Upload suppliers first.")
         else:
             countries = suppliers_df["country"].dropna().unique().tolist()
-            with st.spinner("Fetching news and weather events..."):
-                news_count, weather_count = refresh_all_events(news_api_key, weather_api_key, countries)
-            st.success(f"Fetched {news_count} news + {weather_count} weather events.")
+            with st.spinner(f"Scanning 60+ sources across {len(countries)} countries..."):
+                rss, gdelt, newsapi, weather = refresh_all_events(news_api_key, weather_api_key, countries)
+            st.success(f"📡 {rss} RSS · {gdelt} GDELT · {newsapi} NewsAPI · {weather} ⛅")
+            st.session_state["last_refresh"] = datetime.utcnow()
             st.rerun()
+
+    # Auto-refresh logic — checks every minute if interval has passed
+    if auto_refresh:
+        import time as _time
+        last = st.session_state.get("last_refresh", None)
+        if should_auto_refresh(last, refresh_interval):
+            suppliers_df = get_all_suppliers()
+            if not suppliers_df.empty:
+                countries = suppliers_df["country"].dropna().unique().tolist()
+                rss, gdelt, newsapi, weather = refresh_all_events(news_api_key, weather_api_key, countries)
+                run_scoring_engine()
+                st.session_state["last_refresh"] = datetime.utcnow()
+                st.rerun()
+        _time.sleep(60)
+        st.rerun()
 
     # Re-score button
     if st.button("⚡ Recalculate Risk Scores", use_container_width=True):
