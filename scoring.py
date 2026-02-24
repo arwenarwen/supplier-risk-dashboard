@@ -953,20 +953,12 @@ def get_score_breakdown(
 # ─── Optional: AI-Enhanced Scoring ───────────────────────────────────────────
 
 def ai_parse_event(event_text: str, openai_api_key: str) -> dict:
-    if not openai_api_key:
+    """Use GPT to parse event severity/country. Falls back gracefully if unavailable."""
+    if not openai_api_key or openai is None:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
     try:
-        try:
-    import openai
-except ImportError:
-    openai = None
-try:
-    import json
-except ImportError:
-    json = None
-        if openai is None:
-        return None
-    client = openai.OpenAI(api_key=openai_api_key)
+        import json as _json
+        client = openai.OpenAI(api_key=openai_api_key)
         prompt = (f'Analyze this news excerpt. Respond ONLY in JSON.\n'
                   f'Article: "{event_text}"\n'
                   f'{{"disruption_likely":"Yes/No","country":"name or Unknown","severity":"low/medium/high"}}')
@@ -975,6 +967,6 @@ except ImportError:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=100, temperature=0
         )
-        return json.loads(r.choices[0].message.content.strip())
+        return _json.loads(r.choices[0].message.content.strip())
     except Exception:
         return {"disruption_likely": "Unknown", "country": "Unknown", "severity": "medium"}
