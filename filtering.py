@@ -77,6 +77,14 @@ DISRUPTION_KEYWORDS_L1 = {
     "wartime", "military operation", "armed conflict",
     # Shortages
     "shortage", "scarcity", "rationing", "depletion",
+    # Countdown / imminent threat language — critical forward signals
+    "will decide", "within days", "within 10 days", "within 48 hours",
+    "could strike", "may strike", "considering strike", "potential strike",
+    "military action", "troops deployed", "carriers repositioned",
+    "assets repositioned", "military buildup", "pre-emptive",
+    "decision expected", "deadline approaching", "ultimatum",
+    "regime change", "naval blockade", "strait closure",
+    "hormuz", "bab-el-mandeb", "persian gulf",
 }
 
 # SUPPLY CHAIN CONTEXT keywords — must have at least one
@@ -100,6 +108,10 @@ SUPPLY_CONTEXT_KEYWORDS_L1 = {
     "iron ore", "sunflower oil", "fertilizer", "ammonia", "black sea",
     "export capacity", "cargo vessel", "inland rail", "freight cost",
     "trade corridor", "supply route", "evacuation corridor",
+    # Oil/energy chokepoints — always supply chain relevant
+    "oil supply", "oil price", "oil transit", "crude oil", "energy market",
+    "strait of hormuz", "persian gulf", "red sea route", "suez alternative",
+    "oil tanker", "lng", "natural gas supply", "energy security",
 }
 
 
