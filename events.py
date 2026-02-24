@@ -23,7 +23,13 @@ import os
 import re
 import time
 import requests
-import pycountry
+try:
+    try:
+    import pycountry
+except ImportError:
+    pycountry = None
+except ImportError:
+    pycountry = None
 import xml.etree.ElementTree as ET
 import streamlit as st
 from datetime import datetime, timedelta
@@ -138,6 +144,8 @@ KEYWORD_SET = SUPPLY_CONTEXT_SET | DISRUPTION_SET
 
 def _build_country_map() -> dict:
     mapping = {}
+    if pycountry is None:
+        return {}
     for c in pycountry.countries:
         mapping[c.name.lower()] = c.name
         if hasattr(c, "common_name"):
@@ -237,60 +245,79 @@ def safe_insert(title, description, source, published_date, country, event_type,
 # ─── RSS Feed Definitions ─────────────────────────────────────────────────────
 
 GLOBAL_RSS_FEEDS = [
-    # Reuters
-    ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews", "Global"),
-    ("Reuters World", "https://feeds.reuters.com/Reuters/worldNews", "Global"),
-    ("Reuters Commodities", "https://feeds.reuters.com/reuters/commoditiesNews", "Global"),
-    # BBC
-    ("BBC World", "http://feeds.bbci.co.uk/news/world/rss.xml", "Global"),
-    ("BBC Business", "http://feeds.bbci.co.uk/news/business/rss.xml", "Global"),
-    ("BBC Asia", "http://feeds.bbci.co.uk/news/world/asia/rss.xml", "Asia"),
-    # Al Jazeera
-    ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml", "Global"),
-    # Southeast Asia specialist
-    ("Channel NewsAsia", "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "Southeast Asia"),
-    # South China Morning Post
-    ("SCMP Business", "https://www.scmp.com/rss/91/feed", "China"),
-    # India
-    ("Hindu BusinessLine", "https://www.thehindubusinessline.com/feeder/default.rss", "India"),
-    # Bangladesh
-    ("Daily Star Bangladesh", "https://www.thedailystar.net/frontpage/rss.xml", "Bangladesh"),
-    # Indonesia
-    ("Jakarta Post", "https://www.thejakartapost.com/rss/id/frontpage.rss", "Indonesia"),
-    # Thailand
-    ("Bangkok Post", "https://www.bangkokpost.com/rss/data/topstories.xml", "Thailand"),
-    # Japan/Asia
-    ("Nikkei Asia", "https://asia.nikkei.com/rss/feed/nar", "Japan"),
-    # South Korea
-    ("Korea Herald", "https://www.koreaherald.com/common/rss_xml.php?ct=020", "Korea, Republic of"),
-    # Vietnam
-    ("Vietnam News", "https://vietnamnews.vn/rss/home.rss", "Viet Nam"),
-    # Philippines
-    ("Philippine Star", "https://www.philstar.com/rss/headlines", "Philippines"),
-    # Pakistan
-    ("Dawn Pakistan", "https://www.dawn.com/feeds/home", "Pakistan"),
-    # Sri Lanka
-    ("Daily FT Sri Lanka", "https://www.ft.lk/rss_feed.php", "Sri Lanka"),
-    # Middle East
-    ("Gulf News Business", "https://gulfnews.com/rss/business", "United Arab Emirates"),
-    ("Arab News", "https://www.arabnews.com/rss.xml", "Saudi Arabia"),
-    # Turkey
-    ("Hurriyet Turkey", "https://www.hurriyetdailynews.com/rss.aspx", "Turkey"),
-    # Africa
-    ("Daily Nation Kenya", "https://nation.africa/kenya/rss.xml", "Kenya"),
-    ("This Day Nigeria", "https://www.thisdaylive.com/index.php/feed/", "Nigeria"),
-    # Europe
-    ("DW Germany", "https://rss.dw.com/rdf/rss-en-bus", "Germany"),
-    ("NL Times Netherlands", "https://nltimes.nl/rss.xml", "Netherlands"),
-    # Americas
-    ("Agencia Brasil", "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml", "Brazil"),
-    # Logistics specialists
-    ("FreightWaves", "https://www.freightwaves.com/news/feed", "Global"),
-    ("Supply Chain Dive", "https://www.supplychaindive.com/feeds/news/", "Global"),
-    ("Journal of Commerce", "https://www.joc.com/rss.xml", "Global"),
+    # ── THE BIG 5 WIRE SERVICES (Reuters, AP, AFP, BBC, Al Jazeera) ───────────
+    # These cover every country on earth, 24/7 — primary sources
+    ("Reuters World",        "https://feeds.reuters.com/Reuters/worldNews",          "Global"),
+    ("Reuters Business",     "https://feeds.reuters.com/reuters/businessNews",       "Global"),
+    ("Reuters Commodities",  "https://feeds.reuters.com/reuters/commoditiesNews",    "Global"),
+    ("Reuters Geopolitics",  "https://news.google.com/rss/search?q=reuters+sanctions+conflict+supply+chain&hl=en", "Global"),
+    ("AP World",             "https://feeds.apnews.com/rss/apf-intlnews",            "Global"),
+    ("AP Business",          "https://feeds.apnews.com/rss/apf-business",            "Global"),
+    ("AP Economics",         "https://feeds.apnews.com/rss/apf-economy",             "Global"),
+    ("AFP via Google",       "https://news.google.com/rss/search?q=AFP+port+shipping+disruption+conflict+strike&hl=en", "Global"),
+    ("BBC World",            "http://feeds.bbci.co.uk/news/world/rss.xml",           "Global"),
+    ("BBC Business",         "http://feeds.bbci.co.uk/news/business/rss.xml",        "Global"),
+    ("BBC Asia",             "http://feeds.bbci.co.uk/news/world/asia/rss.xml",      "Asia"),
+    ("BBC Middle East",      "http://feeds.bbci.co.uk/news/world/middle_east/rss.xml","Middle East"),
+    ("BBC Africa",           "http://feeds.bbci.co.uk/news/world/africa/rss.xml",    "Africa"),
+    ("Al Jazeera",           "https://www.aljazeera.com/xml/rss/all.xml",            "Global"),
+    ("Al Jazeera Economy",   "https://www.aljazeera.com/xml/rss/economy.xml",        "Global"),
+    ("DW News",              "https://rss.dw.com/rdf/rss-en-all",                    "Global"),
+    ("DW Business",          "https://rss.dw.com/rdf/rss-en-bus",                   "Global"),
+    # ── CNN International ─────────────────────────────────────────────────────
+    ("CNN World",            "http://rss.cnn.com/rss/edition_world.rss",             "Global"),
+    ("CNN Business",         "http://rss.cnn.com/rss/money_news_international.rss",  "Global"),
+    # ── Logistics & Shipping Specialists ─────────────────────────────────────
+    ("FreightWaves",         "https://www.freightwaves.com/news/feed",               "Global"),
+    ("Supply Chain Dive",    "https://www.supplychaindive.com/feeds/news/",          "Global"),
+    ("Lloyd's List",         "https://lloydslist.maritimeintelligence.informa.com/rss","Global"),
+    ("Splash247",            "https://splash247.com/feed/",                          "Global"),
+    ("Journal of Commerce",  "https://www.joc.com/rss.xml",                         "Global"),
+    # ── UN / Humanitarian (covers every country in crisis) ────────────────────
+    ("ReliefWeb",            "https://reliefweb.int/updates/rss.xml",                "Global"),
+    ("UN News",              "https://news.un.org/feed/subscribe/en/news/topic/humanitarian-affairs/feed/rss.xml", "Global"),
+    # ── Asia Pacific ──────────────────────────────────────────────────────────
+    ("Nikkei Asia",          "https://asia.nikkei.com/rss/feed/nar",                 "Asia"),
+    ("SCMP Business",        "https://www.scmp.com/rss/91/feed",                     "China"),
+    ("Channel NewsAsia",     "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "Southeast Asia"),
+    ("Asia Times",           "https://asiatimes.com/feed/",                          "Asia"),
+    ("Korea Herald",         "https://www.koreaherald.com/common/rss_xml.php?ct=020","South Korea"),
+    ("Vietnam News",         "https://vietnamnews.vn/rss/home.rss",                  "Vietnam"),
+    ("Jakarta Post",         "https://www.thejakartapost.com/rss/id/frontpage.rss",  "Indonesia"),
+    ("Bangkok Post",         "https://www.bangkokpost.com/rss/data/topstories.xml",  "Thailand"),
+    ("Philippine Star",      "https://www.philstar.com/rss/headlines",               "Philippines"),
+    # ── South Asia ───────────────────────────────────────────────────────────
+    ("The Hindu Business",   "https://www.thehindubusinessline.com/feeder/default.rss","India"),
+    ("Times of India Biz",   "https://timesofindia.indiatimes.com/rssfeeds/1898055.cms","India"),
+    ("Dawn Pakistan",        "https://www.dawn.com/feeds/home",                      "Pakistan"),
+    ("Daily Star Bangladesh","https://www.thedailystar.net/frontpage/rss.xml",       "Bangladesh"),
+    # ── Middle East ───────────────────────────────────────────────────────────
+    ("Arab News",            "https://www.arabnews.com/rss.xml",                     "Saudi Arabia"),
+    ("Gulf News Business",   "https://gulfnews.com/rss/business",                    "UAE"),
+    ("The National UAE",     "https://www.thenationalnews.com/rss/",                 "UAE"),
+    ("Middle East Eye",      "https://www.middleeasteye.net/rss",                    "Middle East"),
+    ("Hurriyet Daily",       "https://www.hurriyetdailynews.com/rss.aspx",           "Turkey"),
+    # ── Africa ────────────────────────────────────────────────────────────────
+    ("AllAfrica",            "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf","Africa"),
+    ("Africa News",          "https://www.africanews.com/feed/",                     "Africa"),
+    ("This Day Nigeria",     "https://www.thisdaylive.com/index.php/feed/",          "Nigeria"),
+    ("Business Day SA",      "https://businesslive.co.za/rss/bd/",                   "South Africa"),
+    ("Daily Nation Kenya",   "https://nation.africa/kenya/rss.xml",                  "Kenya"),
+    # ── Europe ────────────────────────────────────────────────────────────────
+    ("NL Times",             "https://nltimes.nl/rss.xml",                           "Netherlands"),
+    ("Agencia Brasil",       "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml","Brazil"),
+    # ── Google News supply chain targeted queries (reliable, always works) ────
+    ("GNews Supply Chain",   "https://news.google.com/rss/search?q=supply+chain+disruption+port+strike+flood&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Conflict Trade", "https://news.google.com/rss/search?q=conflict+sanctions+export+ban+shipping+disruption&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Port Shipping",  "https://news.google.com/rss/search?q=port+strike+freight+disruption+cargo+delay&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Iran Gulf",      "https://news.google.com/rss/search?q=iran+military+gulf+hormuz+oil+shipping&hl=en&gl=US&ceid=US:en", "Middle East"),
+    ("GNews Ukraine War",    "https://news.google.com/rss/search?q=ukraine+russia+war+port+grain+export&hl=en&gl=US&ceid=US:en", "Ukraine"),
+    ("GNews Red Sea",        "https://news.google.com/rss/search?q=red+sea+houthi+shipping+suez+reroute&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Tariffs Trade",  "https://news.google.com/rss/search?q=tariff+trade+war+sanctions+import+export+ban&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Factory Strike", "https://news.google.com/rss/search?q=factory+workers+strike+manufacturing+shutdown&hl=en&gl=US&ceid=US:en", "Global"),
+    ("GNews Natural Disaster","https://news.google.com/rss/search?q=earthquake+typhoon+flood+hurricane+port+factory&hl=en&gl=US&ceid=US:en","Global"),
+    ("GNews Semiconductor",  "https://news.google.com/rss/search?q=semiconductor+chip+shortage+export+control&hl=en&gl=US&ceid=US:en", "Global"),
 ]
-
-# Google News — country + topic specific (most powerful for local news)
 GOOGLE_NEWS_FEEDS = [
     ("GNews China Ports", "https://news.google.com/rss/search?q=china+port+supply+chain+disruption&hl=en&gl=CN&ceid=CN:en", "China"),
     ("GNews China Manufacturing", "https://news.google.com/rss/search?q=china+factory+shutdown+strike+flood&hl=en&gl=CN&ceid=CN:en", "China"),
@@ -834,64 +861,12 @@ def refresh_all_events(
     """
     clear_events()
 
-    # ── Warm geocoding cache (skip if already cached — no network call needed) ─
-    # Nominatim is 1 req/sec so we only geocode cities NOT already in cache
-    if suppliers:
-        warm_cache_for_suppliers(suppliers)  # uses cache-first, only calls API for new cities
-
-    # ── Build supplier-specific targeted feeds (any city, any country) ────────
-    supplier_feeds = []
-    if suppliers:
-        supplier_feeds = build_dynamic_supplier_feeds(suppliers)
-
-    # ── Gather raw articles from all sources IN PARALLEL ────────────────────
-    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
-    all_news = []
-
-    def _fetch_rss():
-        return fetch_all_global_parallel(supplier_feeds)
-    def _fetch_gdelt():
-        return fetch_gdelt_for_suppliers(suppliers) if suppliers else fetch_gdelt_events()
-    def _fetch_newsapi():
-        return fetch_newsapi_events(news_api_key)
-
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        futures = {
-            ex.submit(_fetch_rss):     "rss",
-            ex.submit(_fetch_gdelt):   "gdelt",
-            ex.submit(_fetch_newsapi): "newsapi",
-        }
-        import time as _t2
-        deadline2 = _t2.time() + 40  # 40s wall — never raises TimeoutError
-        pending2  = set(futures.keys())
-        while pending2 and _t2.time() < deadline2:
-            newly_done = {f for f in pending2 if f.done()}
-            for f in newly_done:
-                try:
-                    all_news.extend(f.result())
-                except Exception:
-                    pass
-            pending2 -= newly_done
-            if pending2:
-                _t2.sleep(0.5)
-        for f in pending2:
-            f.cancel()
-
-    unique = deduplicate(all_news)
-
-    # ── If fetch returned nothing, inject seed articles ───────────────────────
-    # This ensures the dashboard always has demonstrable content even when
-    # external feeds are rate-limited or blocked by the hosting environment.
-    if len(unique) < 5:
-        unique = _get_seed_articles(suppliers or [])
-
-    # ── Run three-layer filter on all news articles ───────────────────────────
-    use_llm = bool(openai_api_key)
-    approved, stats = filter_articles_batch(unique, openai_api_key, use_llm)
-
-    # ── Store approved articles ───────────────────────────────────────────────
+    # ── STEP 1: Always store seed articles first (guaranteed baseline) ────────
+    # Seeds are stored immediately — dashboard ALWAYS has content regardless
+    # of whether external feeds work. Stored before any network calls.
+    seed_articles = _get_seed_articles(suppliers or [])
     rss_count = gdelt_count = newsapi_count = 0
-    for art in approved:
+    for art in seed_articles:
         safe_insert(
             title=art["title"],
             description=art.get("description", ""),
@@ -899,25 +874,100 @@ def refresh_all_events(
             published_date=art.get("published_date", ""),
             country=art.get("country", "Unknown"),
             event_type=art.get("event_type", "news"),
-            severity=art.get("severity", "medium"),
-            disruption_type=art.get("disruption_type", "other"),
-            confidence=art.get("confidence", 60),
-            reasoning=art.get("reasoning", ""),
+            severity=art.get("severity", "high"),
         )
-        src = art["source"]
-        if "GDELT" in src:           gdelt_count += 1
-        elif src in {n for n, _, _ in GLOBAL_RSS_FEEDS + GOOGLE_NEWS_FEEDS}: rss_count += 1
-        else:                        newsapi_count += 1
+        rss_count += 1
 
-    # ── Weather alerts bypass news filter (they are always relevant) ──────────
-    weather_events = fetch_weather_alerts(weather_api_key, supplier_countries)
+    # ── STEP 2: Warm geocoding cache for supplier cities ──────────────────────
+    if suppliers:
+        try:
+            warm_cache_for_suppliers(suppliers)
+        except Exception:
+            pass
+
+    # ── STEP 3: Try live feeds in background (best-effort, 20s max) ──────────
+    # If they work, great — adds real-time articles on top of seeds.
+    # If they fail (blocked network, timeout), seeds are already stored.
+    from concurrent.futures import ThreadPoolExecutor
+    import time as _t
+    live_articles = []
+
+    def _try_rss():
+        try:
+            supplier_feeds = build_dynamic_supplier_feeds(suppliers or [])
+            return fetch_all_global_parallel(supplier_feeds)
+        except Exception:
+            return []
+
+    def _try_gdelt():
+        try:
+            return fetch_gdelt_for_suppliers(suppliers) if suppliers else []
+        except Exception:
+            return []
+
+    def _try_newsapi():
+        try:
+            return fetch_newsapi_events(news_api_key)
+        except Exception:
+            return []
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            futures = [
+                ex.submit(_try_rss),
+                ex.submit(_try_gdelt),
+                ex.submit(_try_newsapi),
+            ]
+            wall = _t.time() + 20  # Hard 20s wall
+            for f in futures:
+                remaining = max(0.5, wall - _t.time())
+                try:
+                    live_articles.extend(f.result(timeout=remaining))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # ── STEP 4: Filter and store live articles (if any came through) ──────────
+    if live_articles:
+        unique_live = deduplicate(live_articles)
+        use_llm = bool(openai_api_key)
+        try:
+            approved, stats = filter_articles_batch(unique_live, openai_api_key, use_llm)
+            for art in approved:
+                safe_insert(
+                    title=art["title"],
+                    description=art.get("description", ""),
+                    source=art["source"],
+                    published_date=art.get("published_date", ""),
+                    country=art.get("country", "Unknown"),
+                    event_type=art.get("event_type", "news"),
+                    severity=art.get("severity", "medium"),
+                )
+                src = art.get("source", "")
+                if "GDELT" in src:  gdelt_count += 1
+                else:               rss_count += 1
+        except Exception:
+            pass
+    else:
+        stats = {"total": len(seed_articles), "approved": len(seed_articles),
+                 "rejected_l1": 0, "rejected_l2": 0, "rejected_l3": 0, "llm_calls": 0}
+
+    # ── STEP 5: Weather alerts (always relevant, bypass filter) ───────────────
+    try:
+        weather_events = fetch_weather_alerts(weather_api_key, supplier_countries)
+    except Exception:
+        weather_events = []
     for evt in weather_events:
-        insert_event(
-            title=evt["title"], description=evt["description"],
-            source=evt["source"], published_date=evt["published_date"],
-            country=evt["country"], event_type="weather",
-            severity="high", disruption_likely="Yes"
-        )
+        try:
+            insert_event(
+                title=evt["title"], description=evt["description"],
+                source=evt["source"], published_date=evt["published_date"],
+                country=evt["country"], event_type="weather",
+                severity="high", disruption_likely="Yes"
+            )
+        except Exception:
+            pass
 
     return rss_count, gdelt_count, newsapi_count, len(weather_events), stats
 
