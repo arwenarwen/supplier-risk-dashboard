@@ -30,6 +30,8 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import insert_event, clear_events
 from filtering import filter_articles_batch
+from global_news import fetch_all_global_parallel, fetch_gdelt_for_suppliers, build_dynamic_supplier_feeds
+from city_geocoder import warm_cache_for_suppliers
 
 # ─── Disruption Keywords ──────────────────────────────────────────────────────
 # TWO-LAYER FILTER:
@@ -333,6 +335,62 @@ GOOGLE_NEWS_FEEDS = [
 ALL_FEEDS = GLOBAL_RSS_FEEDS + GOOGLE_NEWS_FEEDS
 
 
+# ─── Supplier-Driven Targeted Feeds ──────────────────────────────────────────
+
+def build_supplier_targeted_feeds(suppliers: list[dict]) -> list[tuple]:
+    """
+    Read the actual uploaded supplier list and generate targeted Google News
+    RSS queries for each unique city+country combination.
+
+    This ensures that a supplier in Odesa, Ukraine gets a feed specifically
+    searching for "odesa ukraine port disruption conflict" rather than relying
+    on generic global feeds to happen to cover it.
+
+    Returns list of (source_name, url, country) tuples — same format as ALL_FEEDS.
+    """
+    targeted = []
+    seen_locations = set()
+
+    for supplier in suppliers:
+        city    = str(supplier.get("city", "") or "").strip()
+        country = str(supplier.get("country", "") or "").strip()
+
+        if not city or not country:
+            continue
+
+        # Deduplicate same city+country
+        location_key = f"{city.lower()}|{country.lower()}"
+        if location_key in seen_locations:
+            continue
+        seen_locations.add(location_key)
+
+        city_q    = city.replace(" ", "+")
+        country_q = country.replace(" ", "+")
+
+        # Query 1: City-specific disruption
+        targeted.append((
+            f"Targeted: {city}",
+            f"https://news.google.com/rss/search?q={city_q}+{country_q}+port+disruption+conflict+strike+flood&hl=en",
+            country
+        ))
+
+        # Query 2: City supply chain
+        targeted.append((
+            f"Targeted SC: {city}",
+            f"https://news.google.com/rss/search?q={city_q}+supply+chain+shipping+factory+war+sanction&hl=en",
+            country
+        ))
+
+        # Query 3: Country-level trade/conflict
+        targeted.append((
+            f"Targeted Trade: {country}",
+            f"https://news.google.com/rss/search?q={country_q}+export+import+port+conflict+sanction+disruption&hl=en",
+            country
+        ))
+
+    return targeted
+
+
 # ─── RSS Parser ───────────────────────────────────────────────────────────────
 
 def fetch_rss_feed(source_name: str, url: str, default_country: str) -> list[dict]:
@@ -540,15 +598,19 @@ def fetch_weather_alerts(api_key: str, supplier_countries: list[str]) -> list[di
 
 # ─── Main Engine ──────────────────────────────────────────────────────────────
 
-def fetch_all_rss_parallel() -> list[dict]:
-    """Fetch all RSS feeds in parallel — 60+ feeds in ~10 seconds."""
+def fetch_all_rss_parallel(supplier_feeds: list[tuple] = None) -> list[dict]:
+    """
+    Fetch all RSS feeds in parallel — 60+ global feeds + supplier-specific feeds.
+    supplier_feeds: additional targeted feeds built from the uploaded supplier list.
+    """
+    feeds_to_run = ALL_FEEDS + (supplier_feeds or [])
     all_articles = []
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=25) as executor:
         futures = {
             executor.submit(fetch_rss_feed, name, url, country): (name, country)
-            for name, url, country in ALL_FEEDS
+            for name, url, country in feeds_to_run
         }
-        for future in as_completed(futures, timeout=30):
+        for future in as_completed(futures, timeout=35):
             try:
                 all_articles.extend(future.result())
             except Exception:
@@ -571,18 +633,37 @@ def refresh_all_events(
     news_api_key: str,
     weather_api_key: str,
     supplier_countries: list[str],
-    openai_api_key: str = ""
+    openai_api_key: str = "",
+    suppliers: list[dict] = None
 ) -> tuple[int, int, int, int, dict]:
     """
-    Pull from ALL sources, run three-layer filter, store only validated events.
+    Pull from ALL sources + supplier-targeted feeds, filter, store validated events.
+    
+    suppliers: list of dicts with 'city' and 'country' keys from the uploaded CSV.
+               Used to build targeted Google News queries for each supplier location.
     Returns (rss_count, gdelt_count, newsapi_count, weather_count, filter_stats).
     """
     clear_events()
 
+    # ── Warm geocoding cache for all supplier cities ─────────────────────────
+    if suppliers:
+        warm_cache_for_suppliers(suppliers)
+
+    # ── Build supplier-specific targeted feeds (any city, any country) ────────
+    supplier_feeds = []
+    if suppliers:
+        supplier_feeds = build_dynamic_supplier_feeds(suppliers)
+
     # ── Gather raw articles from all sources ──────────────────────────────────
     all_news = []
-    all_news.extend(fetch_all_rss_parallel())
-    all_news.extend(fetch_gdelt_events())
+    # Global wire feeds + supplier-targeted feeds (covers any country)
+    all_news.extend(fetch_all_global_parallel(supplier_feeds))
+    # GDELT targeted per-supplier country (150+ countries, 65 languages)
+    if suppliers:
+        all_news.extend(fetch_gdelt_for_suppliers(suppliers))
+    else:
+        all_news.extend(fetch_gdelt_events())
+    # NewsAPI (English, optional)
     all_news.extend(fetch_newsapi_events(news_api_key))
 
     unique = deduplicate(all_news)
