@@ -112,6 +112,10 @@ SUPPLY_CONTEXT_KEYWORDS_L1 = {
     "oil supply", "oil price", "oil transit", "crude oil", "energy market",
     "strait of hormuz", "persian gulf", "red sea route", "suez alternative",
     "oil tanker", "lng", "natural gas supply", "energy security",
+    # Iran / Gulf specific
+    "iran", "tehran", "isfahan", "bandar abbas", "kharg island",
+    "gulf region", "middle east conflict", "hormuz", "persian",
+    "carriers repositioned", "troops deployed", "military assets",
 }
 
 
