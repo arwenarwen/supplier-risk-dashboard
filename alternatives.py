@@ -239,9 +239,6 @@ def detect_countdown(title: str, description: str, published_date_str: str) -> O
                     pass
         except ImportError:
             pass
-        if False:  # placeholder
-            except Exception:
-                pass
 
     return CountdownEvent(
         headline=title[:200],
