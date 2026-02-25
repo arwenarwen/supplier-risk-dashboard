@@ -224,9 +224,43 @@ def is_relevant(title: str, description: str = "") -> bool:
 
 def safe_insert(title, description, source, published_date, country, event_type,
                 severity="medium", disruption_type="other", confidence=60, reasoning="", url=""):
-    """Insert a pre-filtered event — caller is responsible for filtering."""
+    """Insert a pre-filtered event. Rejects articles older than 21 days."""
     if not title:
         return
+
+    # ── 21-day cutoff — reject stale articles ────────────────────────────────
+    if published_date:
+        try:
+            from datetime import datetime, timezone, timedelta
+            from email.utils import parsedate_to_datetime
+            cutoff = datetime.now(timezone.utc) - timedelta(days=21)
+            pub = None
+
+            # Try RFC 2822 first (RSS pubDate: "Mon, 05 Jan 2026 14:30:22 +0000")
+            try:
+                pub = parsedate_to_datetime(str(published_date))
+            except Exception:
+                pass
+
+            # Fallback to strptime formats
+            if pub is None:
+                for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                            "%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
+                            "%Y-%m-%d"):
+                    try:
+                        pub = datetime.strptime(str(published_date)[:26].strip(), fmt)
+                        break
+                    except Exception:
+                        continue
+
+            if pub is not None:
+                if pub.tzinfo is None:
+                    pub = pub.replace(tzinfo=timezone.utc)
+                if pub < cutoff:
+                    return  # Too old — skip silently
+        except Exception:
+            pass  # Unparseable date → allow through
+
     insert_event(
         title=str(title)[:500],
         description=str(description)[:1000],
