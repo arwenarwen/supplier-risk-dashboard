@@ -165,3 +165,17 @@ def clear_events():
     conn.execute("DELETE FROM events")
     conn.commit()
     conn.close()
+
+
+def purge_old_events(max_age_days: int = 21):
+    """Delete any events older than max_age_days from the database."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    conn = get_connection()
+    # published_date stored as ISO string — string comparison works for ISO format
+    conn.execute("""
+        DELETE FROM events
+        WHERE published_date < ? AND published_date != ''
+    """, (cutoff,))
+    conn.commit()
+    conn.close()
