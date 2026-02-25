@@ -649,6 +649,57 @@ def classify_signal(title: str, description: str = "") -> str:
     return "low"
 
 
+def _relative_date(date_str: str) -> str:
+    """Convert a date string to a human-readable relative label."""
+    if not date_str:
+        return "Unknown date"
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        pub = None
+
+        try:
+            pub = parsedate_to_datetime(str(date_str))
+        except Exception:
+            pass
+        if pub is None:
+            for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                        "%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%d"):
+                try:
+                    pub = datetime.strptime(str(date_str)[:26].strip(), fmt)
+                    break
+                except Exception:
+                    continue
+        if pub is None:
+            return date_str[:16].replace("T", " ")
+        if pub.tzinfo is None:
+            pub = pub.replace(tzinfo=timezone.utc)
+
+        delta = now - pub
+        days  = delta.days
+        hours = int(delta.total_seconds() // 3600)
+
+        if hours < 1:
+            return "Just now"
+        elif hours < 6:
+            return f"{hours}h ago"
+        elif hours < 24:
+            return "Today"
+        elif days == 1:
+            return "Yesterday"
+        elif days <= 6:
+            return f"{days} days ago"
+        elif days <= 13:
+            return "Last week"
+        elif days <= 20:
+            return f"{days} days ago"
+        else:
+            return pub.strftime("%b %d, %Y")
+    except Exception:
+        return str(date_str)[:16].replace("T", " ")
+
+
 def get_continent(country_name: str) -> str | None:
     try:
         if pycountry is None or pc is None:
@@ -935,7 +986,7 @@ def get_score_breakdown(
             breakdown.append({
                 "title":          title,
                 "source":         source,
-                "published":      published[:16].replace("T", " "),
+                "published":      _relative_date(published),
                 "event_country":  event_country,
                 "signal":         signal,
                 "proximity":      proximity_label,
