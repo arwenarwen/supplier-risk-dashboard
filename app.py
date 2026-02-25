@@ -330,12 +330,73 @@ if not suppliers_df.empty:
             EVENT_ICONS = {"weather": "⛅", "news": "📰"}
             SEV_COLORS  = {"high": "#ef4444", "medium": "#f59e0b", "low": "#94a3b8"}
 
-            for _, ev in events_df.head(8).iterrows():
+            from email.utils import parsedate_to_datetime as _rss_parse
+            from datetime import datetime as _ddt, timezone as _utz, timedelta as _dtd
+
+            def _parse_any_date(s):
+                """Parse any date format → UTC-aware datetime, or None."""
+                if not s:
+                    return None
+                try:
+                    return _rss_parse(str(s))
+                except Exception:
+                    pass
+                for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                            "%Y%m%dT%H%M%SZ", "%Y%m%d%H%M%S", "%Y-%m-%d"):
+                    try:
+                        p = _ddt.strptime(str(s)[:19].strip(), fmt)
+                        return p.replace(tzinfo=_utz.utc)
+                    except Exception:
+                        pass
+                return None
+
+            def _fmt_age(s):
+                """Return human age label, or None if older than 21 days."""
+                p = _parse_any_date(s)
+                if p is None:
+                    return "Recent"
+                if p.tzinfo is None:
+                    p = p.replace(tzinfo=_utz.utc)
+                now  = _ddt.now(_utz.utc)
+                diff = now - p
+                days = diff.days
+                hrs  = int(diff.total_seconds() // 3600)
+                if days > 21:
+                    return None          # caller should skip this article
+                if hrs  < 1:  return "Just now"
+                if hrs  < 6:  return f"{hrs}h ago"
+                if hrs  < 24: return "Today"
+                if days == 1: return "Yesterday"
+                if days <= 6: return f"{days} days ago"
+                if days <= 13: return "Last week"
+                return f"{days} days ago"
+
+            # Sort by parsed date descending, drop anything > 21 days old
+            _now = _ddt.now(_utz.utc)
+            _cutoff = _now - _dtd(days=21)
+
+            def _dt_key(row):
+                p = _parse_any_date(row.get("published_date", ""))
+                if p is None: return _ddt.min.replace(tzinfo=_utz.utc)
+                if p.tzinfo is None: p = p.replace(tzinfo=_utz.utc)
+                return p
+
+            _ev_rows = [row for _, row in events_df.iterrows()
+                        if (_parse_any_date(row.get("published_date","")) or _ddt.min.replace(tzinfo=_utz.utc)) >= _cutoff]
+            _ev_rows.sort(key=_dt_key, reverse=True)
+
+            if not _ev_rows:
+                st.info("No events from the past 21 days. Click 'Fetch Events Now' to refresh.")
+
+            for ev in _ev_rows[:12]:
+                pub_label = _fmt_age(ev.get("published_date", ""))
+                if pub_label is None:
+                    continue   # older than 21 days — skip
                 icon     = EVENT_ICONS.get(str(ev.get("event_type","")), "📰")
                 country  = str(ev.get("detected_country", "Global"))
                 title    = str(ev.get("title", ""))[:85]
                 source   = str(ev.get("source", ""))[:25]
-                pub      = str(ev.get("published_date", ""))[:10]
+                pub      = pub_label
                 severity = str(ev.get("severity", "medium")).lower()
                 sev_col  = SEV_COLORS.get(severity, "#94a3b8")
 
