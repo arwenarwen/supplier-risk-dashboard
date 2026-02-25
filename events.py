@@ -242,13 +242,13 @@ def safe_insert(title, description, source, published_date, country, event_type,
             except Exception:
                 pass
 
-            # Fallback to strptime formats
+            # Fallback to strptime formats (including GDELT "20251015143022")
             if pub is None:
                 for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
-                            "%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
-                            "%Y-%m-%d"):
+                            "%Y%m%dT%H%M%SZ", "%Y%m%d%H%M%S",
+                            "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%d"):
                     try:
-                        pub = datetime.strptime(str(published_date)[:26].strip(), fmt)
+                        pub = datetime.strptime(str(published_date)[:19].strip(), fmt)
                         break
                     except Exception:
                         continue
