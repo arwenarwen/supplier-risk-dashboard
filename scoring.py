@@ -857,9 +857,9 @@ def score_supplier(
     top_events = scored_events[:MAX_EVENTS_COUNTED]
     total_score = sum(e["score"] for e in top_events)
 
-    # Normalize to 0–100
-    max_possible = MAX_EVENTS_COUNTED * MAX_POINTS_PER_EVENT
-    normalized = min(round((total_score / max_possible) * 100, 1), 100.0)
+    # Score = sum of top 5 raw points, capped at 100
+    # 20.0 + 14.7 + 14.7 + 14.7 + 0.9 = 65.0 → score is 65
+    normalized = min(round(total_score, 1), 100.0)
 
     # Build summary — only show events that actually scored meaningfully
     meaningful = [e for e in top_events if e["dist_mult"] >= 0.15]
