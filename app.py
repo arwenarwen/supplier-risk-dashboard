@@ -487,13 +487,33 @@ if not suppliers_df.empty:
                 if not breakdown:
                     st.info("No events matched this supplier.")
                 else:
-                    # Score summary bar
-                    sc1, sc2, sc3, sc4 = st.columns(4)
+                    # Score summary bar — 3 metrics, no redundancy
+                    sc1, sc2, sc3 = st.columns(3)
                     sc1.metric("Risk Score", f"{score:.0f} / 100")
                     sc2.metric("Risk Level", level)
                     counted = [e for e in breakdown if e["counted"]]
-                    sc3.metric("Events Counted", f"{len(counted)} of {len(breakdown)}")
-                    sc4.metric("Top Event", f"{counted[0]['points']:.1f} pts" if counted else "—")
+                    sc3.metric("Strongest Signal", f"{counted[0]['points']:.1f} pts" if counted else "—")
+
+                    # ── Score explanation ──────────────────────────────────────
+                    pts_str   = " + ".join(f"{e['points']:.1f}" for e in counted) if counted else "0"
+                    uncounted_n = len(breakdown) - len(counted)
+                    total_found = len(breakdown)
+                    st.markdown(f"""
+                    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;
+                                padding:14px 18px;margin:10px 0 6px 0;font-size:0.82rem;color:#94a3b8;line-height:1.8">
+                        <b style="color:#f1f5f9;font-size:0.9rem">📐 How this score is calculated</b><br><br>
+                        Every event scores up to <b style="color:#f1f5f9">25 pts</b> using:&nbsp;
+                        <code style="background:#1e293b;padding:2px 8px;border-radius:4px;color:#7dd3fc">25 × distance_weight × severity_weight × recency_weight</code><br><br>
+                        <b style="color:#f1f5f9">{total_found} events</b> were matched to this supplier.
+                        The <b style="color:#f1f5f9">top 5 scores are summed</b> — that total is the final score (max 100).
+                        The other <b style="color:#f1f5f9">{uncounted_n}</b> lower-scoring event(s) are shown below for context only.<br><br>
+                        <b style="color:#f1f5f9">Top 5:</b>&nbsp;
+                        <span style="color:#7dd3fc">{pts_str}</span>&nbsp;=&nbsp;
+                        <b style="color:#3b82f6;font-size:1.05rem">{score:.0f} / 100</b>
+                        &nbsp;&nbsp;
+                        <span style="color:#64748b;font-size:0.77rem">High ≥ 60 &nbsp;·&nbsp; Medium ≥ 26 &nbsp;·&nbsp; Low &lt; 26</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                     # ── Predictions Panel ─────────────────────────────────────
                     st.markdown("---")
