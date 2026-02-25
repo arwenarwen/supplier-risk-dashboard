@@ -391,15 +391,28 @@ FORECAST_SIGNALS = {
 
 
 def _parse_published(date_str: str):
-    """Parse a published date string into a UTC-aware datetime."""
+    """Parse ANY published date string into a UTC-aware datetime."""
+    if not date_str:
+        return None
+    # RFC 2822 (RSS pubDate) — try first, handles "Mon, 24 Feb 2026 14:30:22 +0000"
+    try:
+        from email.utils import parsedate_to_datetime as _epd
+        p = _epd(str(date_str))
+        if p.tzinfo is None:
+            p = p.replace(tzinfo=timezone.utc)
+        return p
+    except Exception:
+        pass
+    # ISO and GDELT formats
     for fmt in (
         "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
-        "%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT",
-        "%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y%m%dT%H%M%SZ",
+        "%Y%m%d%H%M%S",        # GDELT: "20251015143022"
+        "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
     ):
         try:
-            pub = datetime.strptime(date_str[:26].strip(), fmt)
+            pub = datetime.strptime(str(date_str)[:19].strip(), fmt)
             if pub.tzinfo is None:
                 pub = pub.replace(tzinfo=timezone.utc)
             return pub
@@ -447,12 +460,12 @@ def recency_weight(published_date_str: str, title: str = "", description: str = 
 
     if age_hours <= 48:
         return 1.0
-    elif age_hours <= 168:
+    elif age_hours <= 168:        # 2–7 days
         return 0.7 if persistent else 0.3
-    elif age_hours <= 720:
+    elif age_hours <= 504:        # 7–21 days (504h = 21 days)
         return 0.5 if persistent else 0.0
     else:
-        return 0.0
+        return 0.0                # >21 days — always ignored
 
 
 # ─── Seasonal & Scheduled Forward Risk Calendar ───────────────────────────────
