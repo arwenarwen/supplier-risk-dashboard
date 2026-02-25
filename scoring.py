@@ -971,8 +971,13 @@ def get_score_breakdown(
             dist_mult = distance_multiplier(miles)
             proximity_label = f"{miles:,} miles away"
         elif event_country.lower() == supplier_country.lower():
-            dist_mult = 0.15
-            proximity_label = f"Same country — city unknown"
+            dist_mult = 0.6   # National impact — same country, city not extracted
+            proximity_label = f"National impact — {supplier_country}"
+            # Boost further for high-signal geopolitical events (war, sanctions, strike)
+            signal_check = classify_signal(title, description)
+            if signal_check == "high":
+                dist_mult = min(dist_mult * 1.4, 1.0)
+                proximity_label = f"National impact (HIGH) — {supplier_country}"
         elif event_country not in ("Unknown", "Global", ""):
             ec = get_continent(event_country)
             if ec and ec == supplier_continent:
