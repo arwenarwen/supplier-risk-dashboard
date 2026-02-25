@@ -316,6 +316,10 @@ if not suppliers_df.empty:
             card_class = level if level in ("high", "medium", "low") else "low"
             badge_class = f"risk-{level}"
             if st.button(f"{name}  —  {score:.0f}/100  ({country})", key=f"top5_{name}", use_container_width=True):
+                prev = st.session_state.get("drill_supplier")
+                if prev and prev != name:
+                    for k in [f"rec_{prev}", f"pred_{prev}", f"alt_{prev}"]:
+                        st.session_state.pop(k, None)
                 st.session_state["drill_supplier"] = name
 
     with col_events:
@@ -384,10 +388,17 @@ if not suppliers_df.empty:
 
         label = f"{icon}  {name}   |   {city}, {country}   |   {category} · Tier {tier}   |   **{score:.0f} / 100**"
         if st.button(label, key=f"row_{name}", use_container_width=True):
-            # Toggle: clicking same supplier again closes the panel
-            if st.session_state.get("drill_supplier") == name:
+            prev = st.session_state.get("drill_supplier")
+            if prev == name:
+                # Clicking the same row again — collapse it
                 st.session_state.pop("drill_supplier", None)
+                for k in [f"rec_{name}", f"pred_{name}", f"alt_{name}"]:
+                    st.session_state.pop(k, None)
             else:
+                # New supplier clicked — clear previous panel state entirely
+                if prev:
+                    for k in [f"rec_{prev}", f"pred_{prev}", f"alt_{prev}"]:
+                        st.session_state.pop(k, None)
                 st.session_state["drill_supplier"] = name
 
         # ── Drill-down panel — renders inline below the clicked row ──────────
