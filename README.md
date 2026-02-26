@@ -1,198 +1,218 @@
-# 🛡️ Supplier Risk Monitoring Dashboard
+# SupplierGuard
 
-A production-ready MVP Streamlit application that helps companies monitor supplier risks using real-time news, weather data, and automated risk scoring.
+**Real-time supply chain risk intelligence. Upload your suppliers. Get live risk scores.**
+
+SupplierGuard monitors 50+ global news sources, scores every supplier 0–100 based on proximity to live disruptions, and tells you which suppliers are at risk — and why — before the shipment is late.
 
 ---
 
-## 🗂️ Project Structure
+## What it does
+
+- Ingests your supplier list via CSV upload (name, city, country, tier)
+- Geocodes every supplier to exact coordinates using OpenStreetMap
+- Fetches live news, weather events, and geopolitical disruptions every refresh
+- Scores each supplier using a transparent formula: `25 × distance_weight × severity_weight × recency_weight`
+- Only events from the last **21 days** affect scores — no stale data
+- Surfaces the top 5 scoring events per supplier with full breakdowns
+- Recommends alternative suppliers when risk is high
+- Posts alerts to Slack and Teams when suppliers cross risk thresholds
+
+---
+
+## Project structure
 
 ```
 supplier_risk_dashboard/
-├── app.py              # Main Streamlit UI
-├── database.py         # SQLite database setup and operations
-├── upload.py           # CSV upload, validation, storage
-├── geocoding.py        # OpenStreetMap Nominatim geocoding
-├── events.py           # NewsAPI + OpenWeatherMap event ingestion
-├── scoring.py          # Rule-based risk scoring engine
-├── mapping.py          # Plotly interactive map
-├── alerts.py           # Email + Slack alert dispatching
+├── app.py              # Main Streamlit UI — pages, layout, drill-downs
+├── database.py         # SQLite setup, event storage, purge logic
+├── upload.py           # CSV upload, validation, column normalisation
+├── geocoding.py        # Nominatim geocoding with persistent cache
+├── events.py           # Live news ingestion — 20 parallel Google News queries
+├── scoring.py          # Risk scoring engine — distance, severity, recency weights
+├── mapping.py          # Plotly interactive map with risk-coloured markers
+├── alerts.py           # Slack Block Kit + Teams Adaptive Card alerts
 ├── requirements.txt    # Python dependencies
-├── .env.example        # Environment variable template
+├── .env.example        # Environment variable reference
 └── .streamlit/
     └── secrets.toml    # Streamlit Cloud secrets template
 ```
 
 ---
 
-## 🚀 Quick Start (Local)
+## Quick start
 
-### 1. Clone and set up environment
+**1. Clone and install**
 
 ```bash
-git clone <your-repo-url>
-cd supplier_risk_dashboard
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
+git clone https://github.com/your-org/supplier-risk-dashboard.git
+cd supplier-risk-dashboard
 pip install -r requirements.txt
 ```
 
-### 2. Configure API keys
+**2. Configure environment**
+
+Copy `.env.example` to `.env` and fill in the values you need:
 
 ```bash
-# Copy the example env file
 cp .env.example .env
-
-# Edit .env with your API keys
-nano .env
 ```
 
-**Required keys:**
-| Key | Where to get it | Cost |
-|-----|----------------|------|
-| `NEWS_API_KEY` | [newsapi.org](https://newsapi.org) | Free (100 req/day) |
-| `OPENWEATHER_API_KEY` | [openweathermap.org](https://openweathermap.org/api) | Free tier available |
+| Variable | Required | Description |
+|---|---|---|
+| `SLACK_WEBHOOK_URL` | Optional | Incoming webhook for Slack alerts |
+| `SLACK_BOT_TOKEN` | Optional | Bot token for slash commands (`xoxb-…`) |
+| `SLACK_SIGNING_SECRET` | Optional | Verifies slash command requests |
+| `TEAMS_WEBHOOK_URL` | Optional | Incoming webhook for Teams alerts |
+| `SMTP_HOST` | Optional | SMTP server for email alerts |
+| `SMTP_PORT` | Optional | SMTP port (default `587`) |
+| `SMTP_USER` | Optional | SMTP username / sender address |
+| `SMTP_PASS` | Optional | SMTP password |
+| `ALERT_EMAIL_TO` | Optional | Recipient address for email alerts |
 
-**Optional keys:**
-| Key | Purpose |
-|-----|---------|
-| `OPENAI_API_KEY` | AI-enhanced event parsing via GPT |
-| `SLACK_WEBHOOK_URL` | Slack alert notifications |
-| `SMTP_*` | Email alert notifications |
+The app runs without any environment variables — alerts are silently skipped if credentials are missing.
 
-### 3. Run the app
+**3. Run locally**
 
 ```bash
 streamlit run app.py
 ```
 
-The app will open at `http://localhost:8501`
-
-### 4. Set up the database
-
-The SQLite database (`supplier_risk.db`) is **created automatically** on first run. No manual setup needed.
+Open [http://localhost:8501](http://localhost:8501).
 
 ---
 
-## 📋 Using the Dashboard
+## CSV format
 
-### Step 1: Upload Suppliers
-- Download the sample CSV from the sidebar
-- Fill it with your supplier data
-- Upload via the file uploader
+Upload a CSV with the following columns. Column names are case-insensitive and extra columns are ignored.
 
-**Required CSV columns:**
-| Column | Example |
-|--------|---------|
-| Supplier Name | Acme Electronics |
-| Category | Electronics |
-| City | Shenzhen |
-| Country | China |
-| Tier | 1 |
+| Column | Required | Example |
+|---|---|---|
+| `supplier_name` | Yes | `Apex Electronics Co.` |
+| `city` | Yes | `Dhaka` |
+| `country` | Yes | `Bangladesh` |
+| `tier` | No | `Tier 1` |
+| `category` | No | `Electronics` |
+| `contact_email` | No | `orders@apex.com` |
 
-### Step 2: Fetch Events
-- Click **"🔄 Fetch Latest Events"** in the sidebar
-- The system pulls news and weather/disaster data
-- Events are stored in the database
-
-### Step 3: Score Suppliers
-- Click **"⚡ Recalculate Risk Scores"** in the sidebar
-- Risk scores are computed per supplier based on event proximity
-
-### Step 4: Review & Alert
-- Review the map, top-5 list, and full table
-- Use filters to focus on high-risk suppliers
-- Click **"🔔 Send Alerts"** to notify via email/Slack
+A sample file is available at `sample_suppliers.csv` in the repo root.
 
 ---
 
-## ⚙️ Risk Scoring Logic
+## How scoring works
 
-| Condition | Points Added |
-|-----------|-------------|
-| Event in same country as supplier | +70 |
-| Event in same continent/region | +40 |
-| Event elsewhere | +10 |
+Every matched event scores up to **25 points**:
 
-Multiple events are aggregated. Scores are capped at 100.
+```
+event_score = 25 × distance_weight × severity_weight × recency_weight
+```
 
-**Risk Levels:**
-- 🔴 **High**: Score > 50
-- 🟡 **Medium**: Score 26–50
-- 🟢 **Low**: Score ≤ 25
+| Weight | Range | Logic |
+|---|---|---|
+| `distance_weight` | 0.0 – 1.0 | 1.0 = same city · 0.84 = same country + high signal · 0.6 = same country · 0.15 = regional |
+| `severity_weight` | 0.4 – 1.0 | Classified from article title and body: high / medium / low signal |
+| `recency_weight` | 0.0 – 1.0 | Linear decay from 1.0 (today) to 0.0 (21 days ago). Zero beyond 21 days. |
 
----
+The **top 5 event scores are summed** to produce the final risk score (max 100). Events ranked 6+ are displayed for context but do not affect the score.
 
-## 🤖 AI-Enhanced Scoring (Optional)
+**Risk thresholds:**
 
-If an `OPENAI_API_KEY` is set, the system uses GPT-4o-mini to:
-- Classify whether a news article is likely to cause supply disruption
-- Extract the affected country/region
-- Estimate severity (low/medium/high)
-
-This enriches the risk scoring beyond keyword matching.
+| Score | Level |
+|---|---|
+| 60 – 100 | 🔴 High |
+| 26 – 59 | 🟡 Medium |
+| 0 – 25 | 🟢 Low |
 
 ---
 
-## 🚀 Deploy to Streamlit Cloud
+## News sources
 
-1. Push your code to a **public GitHub repo** (do NOT include `.env` or `supplier_risk.db`)
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your repo and set `app.py` as the entry point
-4. Add your API keys under **Settings > Secrets** using the format in `.streamlit/secrets.toml`
+On every fetch, the app runs **20 parallel Google News RSS queries** targeting the supplier countries in your uploaded CSV plus a set of always-on global risk queries:
 
-> **Note:** Streamlit Cloud has ephemeral storage — the SQLite database resets on each deployment. For production, replace SQLite with a hosted database (e.g., Supabase, PlanetScale).
+- Red Sea / Houthi shipping disruption
+- Iran sanctions and military activity
+- Ukraine war and Black Sea routes
+- Taiwan Strait tensions
+- US-China trade and tariff changes
+- Semiconductor shortage and export controls
+- Global container shipping and port strikes
+- Typhoon, earthquake, and flood events
+
+Plus country-specific queries for Bangladesh, Vietnam, Cambodia, India, Pakistan, Nigeria, South Korea, Indonesia, Philippines, Mexico, Brazil, Egypt, Turkey, Morocco, Sri Lanka, Saudi Arabia, UAE, Israel, and Japan when those countries appear in your supplier list.
+
+Only articles published within the last **21 days** are stored. Older articles are purged on every fetch.
 
 ---
 
-## 🔔 Configuring Alerts
+## Deploying to Streamlit Cloud
 
-### Email (Gmail)
-1. Enable 2FA on your Google account
-2. Generate an App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-3. Set `SMTP_USER`, `SMTP_PASS`, `ALERT_EMAIL_TO` in `.env`
+1. Push the repo to GitHub
+2. Go to [share.streamlit.io](https://share.streamlit.io) and connect the repo
+3. Set `app.py` as the entry point
+4. Add your secrets under **Settings → Secrets** using the format in `.streamlit/secrets.toml`
+5. Deploy — the app auto-restarts on every push to `main`
+
+---
+
+## Slack & Teams integration
 
 ### Slack
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create App
-2. Enable "Incoming Webhooks"
-3. Add a webhook URL for your target channel
-4. Set `SLACK_WEBHOOK_URL` in `.env`
+
+Set `SLACK_WEBHOOK_URL` to receive formatted Block Kit alert cards when suppliers cross the High risk threshold.
+
+To enable the `/supplierguard [name]` slash command, also set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`, then run `slack_bot.py` as a separate service alongside the Streamlit app.
+
+### Teams
+
+Set `TEAMS_WEBHOOK_URL` to receive Adaptive Card alerts in any Teams channel. Create the webhook under **Channel Settings → Connectors → Incoming Webhook**.
 
 ---
 
-## 🔮 Future Enhancements
+## File-by-file reference
 
-- [ ] ML predictive scoring based on historical disruption data
-- [ ] Supplier relationship graph (multi-tier dependencies)
-- [ ] Automated daily scheduling with Celery or APScheduler
-- [ ] PostgreSQL backend for production deployments
-- [ ] Supplier onboarding self-service portal
-- [ ] PDF risk report generation
+### `app.py`
+Main Streamlit application. Handles page routing, sidebar controls, CSV upload flow, the interactive map, supplier drill-down panels, score explanation boxes, predictions, and the manual alert dispatch button.
+
+### `database.py`
+SQLite database layer. Creates the `events` and `suppliers` tables on first run. Exposes `insert_event`, `get_events_for_supplier`, `purge_old_events`, and `clear_events`. Database file is stored at `supplier_risk.db` in the working directory.
+
+### `upload.py`
+CSV parsing and validation. Normalises column names, checks for required fields, deduplicates rows, and writes validated suppliers to the database. Returns a clean DataFrame for the rest of the app.
+
+### `geocoding.py`
+Wraps the Nominatim API with a persistent JSON cache (`geocode_cache.json`). Converts city + country strings to latitude/longitude. Falls back gracefully when a location cannot be resolved.
+
+### `events.py`
+News ingestion engine. `refresh_all_events` orchestrates the full fetch cycle: purges old events, runs 20 parallel Google News RSS queries via `_get_live_baseline_articles`, parses publication dates using a robust multi-format parser (ISO 8601, GDELT `YYYYMMDDHHmmss`, RFC 2822), enforces the 21-day cutoff at storage time, and stores passing articles to SQLite.
+
+### `scoring.py`
+Risk scoring engine. `score_supplier` computes the weighted score for a given supplier against all stored events. `get_score_breakdown` returns the per-event detail used in the drill-down UI. `classify_signal` classifies article titles as high / medium / low signal using keyword matching. `_parse_published` handles all known date formats from RSS feeds.
+
+### `mapping.py`
+Builds the Plotly scatter map. Colours markers by risk level, sizes them by score, and renders supplier name and score in hover tooltips.
+
+### `alerts.py`
+Alert dispatcher. Builds Slack Block Kit payloads (`build_slack_alert_blocks`, `build_slack_digest_blocks`, `build_slack_query_blocks`) and Teams Adaptive Card payloads (`build_teams_alert_card`, `build_teams_digest_card`). `dispatch_alerts` iterates over High-risk suppliers and sends to all configured channels.
 
 ---
 
-## 📦 Dependencies
+## Requirements
 
-- **Streamlit** — UI framework
-- **Pandas** — Data manipulation
-- **Plotly** — Interactive maps and charts
-- **Requests** — API calls
-- **pycountry / pycountry-convert** — Country/continent mapping
-- **python-dotenv** — Environment variable loading
-- **OpenAI** (optional) — AI event parsing
-- **SQLite3** (stdlib) — Local database
+```
+streamlit
+pandas
+plotly
+requests
+feedparser
+geopy
+python-dotenv
+```
+
+Full list with pinned versions in `requirements.txt`.
+
+Python 3.9+ required.
 
 ---
 
-## 🐛 Troubleshooting
+## Licence
 
-**"Missing required columns"**: Ensure your CSV has exact column names (case-sensitive).
-
-**Geocoding is slow**: Nominatim allows 1 request/second. 20 suppliers = ~20 seconds. This is by design.
-
-**NewsAPI 426 error**: Free tier only allows recent articles. Upgrade or use a different API endpoint.
-
-**Map shows no markers**: Run geocoding after upload. Suppliers need lat/lon to appear on the map.
+MIT
